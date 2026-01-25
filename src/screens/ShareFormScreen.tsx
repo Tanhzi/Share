@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
-import DocumentPicker from 'react-native-document-picker';
+import * as DocumentPicker from '@react-native-documents/picker';
 import Geolocation from 'react-native-geolocation-service';
 import { useAuth, API_URL } from '../context/AuthContext';
 
@@ -103,17 +103,23 @@ const ShareFormScreen = ({ navigation }: any) => {
 
   const handleSelectDocument = async () => {
     try {
-      const res = await DocumentPicker.pickSingle({
+      const res = await DocumentPicker.pick({
+        allowMultiSelection: false,
         type: [DocumentPicker.types.allFiles],
       });
-      setSelectedFile({
-        uri: res.uri || '',
-        type: res.type || 'application/octet-stream',
-        name: res.name || 'unknown',
-        size: res.size || 0
-      });
+      if (res.length > 0) {
+        const file = res[0];
+        setSelectedFile({
+          uri: file.uri || '',
+          name: file.name || '',
+          type: file.type || '',
+          size: file.size || 0
+        });
+      } else {
+        Alert.alert('Error', 'No file selected');
+      }
     } catch (err) {
-      if (!DocumentPicker.isCancel(err)) {
+      if (!(err instanceof Error && err.message === 'User canceled document picker')) {
         Alert.alert('Error', 'Unknown error picking file');
       }
     }
