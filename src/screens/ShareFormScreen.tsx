@@ -5,7 +5,7 @@ import {
   PermissionsAndroid
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { launchCamera } from 'react-native-image-picker';
 import * as DocumentPicker from '@react-native-documents/picker';
 import Geolocation from 'react-native-geolocation-service';
 import { useAuth, API_URL } from '../context/AuthContext';
@@ -60,44 +60,71 @@ const ShareFormScreen = ({ navigation }: any) => {
   };
 
   const handleSelectMedia = async (useCamera = false) => {
-    const options: any = {
-      mediaType: activeTab === 'Videos' ? 'video' : 'photo',
-      quality: 0.8,
-      includeBase64: false,
-      saveToPhotos: true, // ← Đảm bảo lưu vào thư viện trên Android
-      videoQuality: 'medium',
-    };
+    if (useCamera) {
+      const options: any = {
+        mediaType: activeTab === 'Videos' ? 'video' : 'photo',
+        quality: 0.8,
+        includeBase64: false,
+        saveToPhotos: true,
+        videoQuality: 'medium',
+      };
 
-    try {
-      const result = useCamera 
-        ? await launchCamera(options) 
-        : await launchImageLibrary(options);
+      try {
+        const result = await launchCamera(options);
 
-      if (result.didCancel) return;
-      if (result.errorCode) {
-        Alert.alert('Error', result.errorMessage || 'Failed to capture media');
-        return;
+        if (result.didCancel) return;
+        if (result.errorCode) {
+          Alert.alert('Error', result.errorMessage || 'Failed to capture media');
+          return;
+        }
+
+        if (!result.assets?.[0]) {
+          Alert.alert('Error', 'No media returned');
+          return;
+        }
+
+        const asset = result.assets[0];
+        let uri = asset.uri;
+        if (Platform.OS === 'android' && uri?.startsWith('file://')) {
+          uri = uri.replace('file://', '');
+        }
+
+        const fileName = asset.fileName || `capture-${Date.now()}.${activeTab === 'Videos' ? 'mp4' : 'jpg'}`;
+        const fileType = asset.type || (activeTab === 'Videos' ? 'video/mp4' : 'image/jpeg');
+        const fileSize = asset.fileSize || 0;
+
+        setSelectedFile({ uri: uri || '', type: fileType, name: fileName, size: fileSize });
+      } catch (err) {
+        console.error('[Media Picker Error]', err);
+        Alert.alert('Error', 'Could not open camera');
       }
-
-      if (!result.assets?.[0]) {
-        Alert.alert('Error', 'No media returned');
-        return;
+    } else {
+      try {
+        const mimeTypes = activeTab === 'Videos' 
+          ? [DocumentPicker.types.video]
+          : [DocumentPicker.types.images];
+          
+        const res = await DocumentPicker.pick({
+          allowMultiSelection: false,
+          type: mimeTypes,
+        });
+        
+        if (res.length > 0) {
+          const file = res[0];
+          setSelectedFile({
+            uri: file.uri || '',
+            name: file.name || '',
+            type: file.type || '',
+            size: file.size || 0
+          });
+        } else {
+          Alert.alert('Error', 'No file selected');
+        }
+      } catch (err) {
+        if (!(err instanceof Error && err.message === 'User canceled document picker')) {
+          Alert.alert('Error', 'Unknown error picking file');
+        }
       }
-
-      const asset = result.assets[0];
-      let uri = asset.uri;
-      if (Platform.OS === 'android' && uri?.startsWith('file://')) {
-        uri = uri.replace('file://', '');
-      }
-
-      const fileName = asset.fileName || `capture-${Date.now()}.${activeTab === 'Videos' ? 'mp4' : 'jpg'}`;
-      const fileType = asset.type || (activeTab === 'Videos' ? 'video/mp4' : 'image/jpeg');
-      const fileSize = asset.fileSize || 0;
-
-      setSelectedFile({ uri: uri || '', type: fileType, name: fileName, size: fileSize });
-    } catch (err) {
-      console.error('[Media Picker Error]', err);
-      Alert.alert('Error', 'Could not open camera/gallery');
     }
   };
 
@@ -162,21 +189,58 @@ const ShareFormScreen = ({ navigation }: any) => {
             } else if (activeTab === 'Text') {
               formData.append('textContent', textInput.trim());
             } else {
-              formData.append('file', {
+              // Debug: Log file details before upload
+              console.log('[Upload Debug] File details:', {
                 uri: selectedFile?.uri,
                 type: selectedFile?.type,
                 name: selectedFile?.name,
-              } as any);
+                size: selectedFile?.size
+              });
+              
+              // Fix for Android file URI in FormData
+              let fileUri = selectedFile?.uri;
+              if (Platform.OS === 'android' && !fileUri?.startsWith('file://') && !fileUri?.startsWith('content://')) {
+                fileUri = `file://${fileUri}`;
+              }
+              
+              // For React Native, create a proper file object for FormData
+              const fileToUpload = {
+                uri: fileUri,
+                type: selectedFile?.type,
+                name: selectedFile?.name,
+              };
+              formData.append('file', fileToUpload as any);
+              
+              // Debug: Log FormData contents (without file data for security)
+              console.log('[Upload Debug] FormData prepared:', {
+                category: activeTab,
+                hasFile: !!selectedFile,
+                fileName: selectedFile?.name,
+                fileSize: selectedFile?.size,
+                finalUri: fileUri
+              });
             }
 
-            fetch(`${API_URL.replace('/auth', '/documents')}/share`, {
+            const uploadUrl = `${API_URL.replace('/auth', '/documents')}/share`;
+            console.log('[Upload Debug] Upload URL:', uploadUrl);
+            
+            fetch(uploadUrl, {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${token}`,
+                // Không set Content-Type cho FormData - browser sẽ tự set với boundary
               },
               body: formData,
             })
-            .then(response => response.json().then(data => ({ response, data })))
+            .then(async response => {
+              const data = await response.json().catch(() => ({}));
+              console.log('[Upload Debug] Response:', {
+                status: response.status,
+                ok: response.ok,
+                data: data
+              });
+              return { response, data };
+            })
             .then(({ response, data }) => {
               setIsLoading(false);
               if (response.ok) {
@@ -190,7 +254,21 @@ const ShareFormScreen = ({ navigation }: any) => {
             })
             .catch(err => {
               setIsLoading(false);
-              Alert.alert('Error', err.message || 'Upload failed');
+              console.error('[Upload Debug] Full error:', err);
+              
+              // Detailed error information
+              let errorMessage = 'Upload failed';
+              if (err.message) {
+                errorMessage = err.message;
+              }
+              if (err.statusCode) {
+                errorMessage += ` (Status: ${err.statusCode})`;
+              }
+              if (err.response) {
+                errorMessage += ` - ${JSON.stringify(err.response)}`;
+              }
+              
+              Alert.alert('Error', errorMessage);
               reject(err);
             });
           },

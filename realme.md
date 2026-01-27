@@ -1,0 +1,1 @@
+$env:ANDROID_HOME = "C:\Users\kaido\AppData\Local\Android\Sdk"; npm run android
