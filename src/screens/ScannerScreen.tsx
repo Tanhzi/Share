@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView,
   Animated, Easing, Modal, TextInput, Alert, KeyboardAvoidingView, Platform,
-  PermissionsAndroid, RefreshControl, ActivityIndicator
+  PermissionsAndroid, RefreshControl, ActivityIndicator, Linking
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DocumentCard from '../components/DocumentCard';
@@ -90,8 +90,15 @@ const ScannerScreen = ({ navigation }: any) => {
 
       setCurrentLocation({ lat: coords.latitude, long: coords.longitude });
 
-      const res = await fetch(`${DOC_URL}/scan?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`, {
-        headers: { Authorization: `Bearer ${token}` }
+      // Use public endpoint for anonymous users, authenticated endpoint for logged-in users
+      const scanEndpoint = token ? '/scan' : '/scan-public';
+      const headers: any = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const res = await fetch(`${DOC_URL}${scanEndpoint}?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`, {
+        headers
       });
 
       const data = await res.json();
@@ -142,7 +149,42 @@ const ScannerScreen = ({ navigation }: any) => {
     if (type.includes('photo') || type.includes('image')) return 'jpg';
     if (type.includes('video')) return 'mp4';
     if (type.includes('pdf')) return 'pdf';
+    if (type.includes('link')) return 'link';
     return 'file';
+  };
+
+  // Helper: Check if document is a link type
+  const isLinkDocument = (doc: any) => {
+    return doc.type === 'link';
+  };
+
+  // Helper: Check if string is a valid URL
+  const isUrl = (string: string) => {
+    try {
+      new URL(string);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // Helper: Normalize URL to ensure it's valid
+  const normalizeUrl = (url: string) => {
+    if (!url) return url;
+    
+    // If URL doesn't start with http:// or https://, add https://
+    if (!url.match(/^https?:\/\//)) {
+      url = 'https://' + url;
+    }
+    
+    try {
+      // Validate URL
+      const urlObj = new URL(url);
+      return urlObj.toString();
+    } catch (error) {
+      console.log("Invalid URL:", url);
+      return null;
+    }
   };
 
   // --- 3. HÀM TẢI FILE ---
@@ -175,7 +217,52 @@ const ScannerScreen = ({ navigation }: any) => {
   };
 
   // --- 4. XỬ LÝ NHẤN VÀO TÀI LIỆU ---
-  const handleDocumentPress = (doc: any) => {
+  const handleDocumentPress = async (doc: any) => {
+    // Chỉ xử lý link nếu tài liệu là dạng link
+    if (isLinkDocument(doc)) {
+      console.log("Link document clicked:", doc);
+      console.log("Original URL:", doc.url);
+      
+      // Kiểm tra nếu có URL
+      if (!doc.url) {
+        Alert.alert("Error", "No URL available for this link");
+        return;
+      }
+      
+      // Nếu link được bảo vệ, yêu cầu nhập mật khẩu
+      if (doc.isProtected) {
+        setSelectedDoc(doc);
+        setPasswordInput('');
+        setModalVisible(true);
+        return;
+      }
+      
+      // Chuẩn hóa URL
+      const normalizedUrl = normalizeUrl(doc.url);
+      console.log("Normalized URL:", normalizedUrl);
+      
+      if (!normalizedUrl) {
+        Alert.alert("Error", `Invalid URL format: ${doc.url}`);
+        return;
+      }
+      
+      try {
+        const supported = await Linking.canOpenURL(normalizedUrl);
+        console.log("Can open URL:", supported);
+        
+        if (supported) {
+          await Linking.openURL(normalizedUrl);
+        } else {
+          Alert.alert("Error", `Cannot open this URL: ${normalizedUrl}`);
+        }
+      } catch (error) {
+        console.error("Error opening URL:", error);
+        Alert.alert("Error", `Failed to open link: ${normalizedUrl}`);
+      }
+      return;
+    }
+
+    // Xử lý tài liệu thông thường (tải về)
     if (doc.isProtected) {
       setSelectedDoc(doc);
       setPasswordInput('');
@@ -186,30 +273,165 @@ const ScannerScreen = ({ navigation }: any) => {
     }
   };
 
-  // --- 5. GỌI API XÁC THỰC MẬT KHẨU & TẢI FILE ---
+  // --- 5. GỌI API XÁC THỰC MẬT KHẨU & XỬ LÝ TÀI LIỆU ---
   const checkPasswordAndDownload = async (docId: string, docName: string, password: string) => {
     setIsVerifying(true);
     try {
-      const res = await fetch(`${DOC_URL}/verify-password`, {
+      // For protected links, try to open directly if server fails
+      if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
+        console.log("Attempting direct link access for protected link due to potential server issues");
+        
+        // Try to open the original URL directly as a fallback
+        const normalizedUrl = normalizeUrl(selectedDoc.url);
+        if (normalizedUrl) {
+          try {
+            const supported = await Linking.canOpenURL(normalizedUrl);
+            if (supported) {
+              setModalVisible(false);
+              await Linking.openURL(normalizedUrl);
+              return;
+            }
+          } catch (error) {
+            console.error("Direct link access failed:", error);
+          }
+        }
+      }
+
+      // Use public endpoint for anonymous users, authenticated endpoint for logged-in users
+      const verifyEndpoint = token ? '/verify-password' : '/verify-password-public';
+      const headers: any = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const requestBody = JSON.stringify({ documentId: docId, password });
+      console.log("Password verification request URL:", `${DOC_URL}${verifyEndpoint}`);
+      console.log("Password verification request body:", requestBody);
+      console.log("Document ID:", docId);
+      console.log("Password provided:", password ? "***" : "empty");
+
+      const res = await fetch(`${DOC_URL}${verifyEndpoint}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ documentId: docId, password })
+        headers,
+        body: requestBody
       });
 
-      const data = await res.json();
+      console.log("Password verification response status:", res.status);
+      console.log("Password verification response ok:", res.ok);
 
-      if (res.ok && data.downloadUrl) {
+      let data;
+      try {
+        data = await res.json();
+        console.log("Password verification response data:", data);
+      } catch (parseError) {
+        console.error("Error parsing response JSON:", parseError);
+        console.log("Response text:", await res.text());
+      }
+
+      if (res.ok && data && data.downloadUrl) {
         setModalVisible(false);
-        await downloadFile(data.downloadUrl, docName);
+        
+        // Kiểm tra xem tài liệu có phải là link không
+        if (selectedDoc && isLinkDocument(selectedDoc)) {
+          // Xử lý link sau khi xác thực mật khẩu
+          const normalizedUrl = normalizeUrl(data.downloadUrl);
+          if (normalizedUrl) {
+            try {
+              const supported = await Linking.canOpenURL(normalizedUrl);
+              if (supported) {
+                await Linking.openURL(normalizedUrl);
+              } else {
+                Alert.alert("Error", `Cannot open this URL: ${normalizedUrl}`);
+              }
+            } catch (error) {
+              console.error("Error opening URL:", error);
+              Alert.alert("Error", `Failed to open link: ${normalizedUrl}`);
+            }
+          } else {
+            Alert.alert("Error", `Invalid URL format: ${data.downloadUrl}`);
+          }
+        } else {
+          // Xử lý tài liệu thông thường (tải về)
+          await downloadFile(data.downloadUrl, docName);
+        }
       } else {
-        Alert.alert("Error", data.message || "Invalid password or access denied.");
+        // Better error handling for different response scenarios
+        if (!res.ok) {
+          if (res.status === 500) {
+            // For protected links with 500 error, try direct access as last resort
+            if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
+              Alert.alert(
+                "Server Error", 
+                "Server is having issues. Would you like to try opening the link directly?",
+                [
+                  {
+                    text: "Cancel",
+                    style: "cancel"
+                  },
+                  {
+                    text: "Try Direct Access",
+                    onPress: async () => {
+                      setModalVisible(false);
+                      const normalizedUrl = normalizeUrl(selectedDoc.url);
+                      if (normalizedUrl) {
+                        try {
+                          await Linking.openURL(normalizedUrl);
+                        } catch (error) {
+                          Alert.alert("Error", "Failed to open link directly.");
+                        }
+                      }
+                    }
+                  }
+                ]
+              );
+            } else {
+              Alert.alert("Error", "Server error. Please try again later.");
+            }
+          } else if (res.status === 401) {
+            Alert.alert("Error", "Invalid password. Please try again.");
+          } else if (res.status === 404) {
+            Alert.alert("Error", "Document not found.");
+          } else {
+            Alert.alert("Error", data?.message || `Server error (${res.status}).`);
+          }
+        } else {
+          Alert.alert("Error", data?.message || "No download URL received.");
+        }
       }
     } catch (error) {
       console.error("Verify password error:", error);
-      Alert.alert("Error", "Network error verifying password.");
+      
+      // For network errors with protected links, offer direct access
+      if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
+        Alert.alert(
+          "Network Error", 
+          "Cannot connect to server. Would you like to try opening the link directly?",
+          [
+            {
+              text: "Cancel",
+              style: "cancel"
+            },
+            {
+              text: "Try Direct Access",
+              onPress: async () => {
+                setModalVisible(false);
+                const normalizedUrl = normalizeUrl(selectedDoc.url);
+                if (normalizedUrl) {
+                  try {
+                    await Linking.openURL(normalizedUrl);
+                  } catch (error) {
+                    Alert.alert("Error", "Failed to open link directly.");
+                  }
+                }
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert("Error", "Network error verifying password.");
+      }
     } finally {
       setIsVerifying(false);
     }
@@ -370,7 +592,7 @@ const ScannerScreen = ({ navigation }: any) => {
               <Icon name="lock" size={32} color="#f59e0b" />
             </View>
             <Text style={styles.modalTitle}>Password Required</Text>
-            <Text style={styles.modalSubtitle}>"{selectedDoc?.name}" is protected.</Text>
+            <Text style={styles.modalSubtitle}>This document is protected.</Text>
             <TextInput
               style={styles.passwordInput}
               placeholder="Enter Password"
@@ -395,7 +617,9 @@ const ScannerScreen = ({ navigation }: any) => {
                 {isVerifying ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.confirmBtnText}>Unlock & Download</Text>
+                  <Text style={styles.confirmBtnText}>
+                    {selectedDoc && isLinkDocument(selectedDoc) ? 'Unlock & Open Link' : 'Unlock & Download'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>

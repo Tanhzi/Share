@@ -37,6 +37,7 @@ const ShareFormScreen = ({ navigation }: any) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPublicSharing, setIsPublicSharing] = useState(false);
 
   const requestLocationPermission = async (): Promise<boolean> => {
     if (Platform.OS === 'ios') {
@@ -199,8 +200,13 @@ const ShareFormScreen = ({ navigation }: any) => {
               
               // Fix for Android file URI in FormData
               let fileUri = selectedFile?.uri;
-              if (Platform.OS === 'android' && !fileUri?.startsWith('file://') && !fileUri?.startsWith('content://')) {
-                fileUri = `file://${fileUri}`;
+              if (Platform.OS === 'android') {
+                // For Android, ensure proper URI format
+                if (!fileUri?.startsWith('file://') && !fileUri?.startsWith('content://')) {
+                  fileUri = `file://${fileUri}`;
+                }
+                // For content:// URIs (common for media files), we need to use them as-is
+                // React Native's FormData will handle content:// URIs properly
               }
               
               // For React Native, create a proper file object for FormData
@@ -221,15 +227,17 @@ const ShareFormScreen = ({ navigation }: any) => {
               });
             }
 
-            const uploadUrl = `${API_URL.replace('/auth', '/documents')}/share`;
+            const uploadUrl = `${API_URL.replace('/auth', '/documents')}/share${isPublicSharing ? '-public' : ''}`;
             console.log('[Upload Debug] Upload URL:', uploadUrl);
+            
+            const headers: any = {};
+            if (!isPublicSharing && token) {
+              headers['Authorization'] = `Bearer ${token}`;
+            }
             
             fetch(uploadUrl, {
               method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                // Không set Content-Type cho FormData - browser sẽ tự set với boundary
-              },
+              headers: headers,
               body: formData,
             })
             .then(async response => {
@@ -415,6 +423,27 @@ const ShareFormScreen = ({ navigation }: any) => {
 
           <View style={styles.settingsCard}>
             <Text style={styles.cardTitle}>Upload Settings</Text>
+            <View style={styles.settingGroup}>
+              <Text style={styles.settingLabel}>Sharing Mode</Text>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <View style={[styles.iconBox, isPublicSharing && { backgroundColor: '#dcfce7' }]}>
+                    <Icon name="public" size={20} color={isPublicSharing ? '#16a34a' : COLORS.slate400} />
+                  </View>
+                  <View>
+                    <Text style={styles.settingRowTitle}>Public Sharing</Text>
+                    <Text style={styles.settingRowSub}>Share without login required</Text>
+                  </View>
+                </View>
+                <Switch
+                  value={isPublicSharing}
+                  onValueChange={setIsPublicSharing}
+                  trackColor={{ false: COLORS.border, true: "#dcfce7" }}
+                  thumbColor={isPublicSharing ? "#16a34a" : "#f1f5f9"}
+                />
+              </View>
+            </View>
+
             <View style={styles.settingGroup}>
               <Text style={styles.settingLabel}>Expiration Time</Text>
               <View style={styles.chipsContainer}>

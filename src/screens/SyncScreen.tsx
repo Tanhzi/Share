@@ -6,6 +6,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth, API_URL } from '../context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
+import GuestPlaceholder from '../components/GuestPlaceholder';
 
 const COLORS = {
   primary: '#2563EB', primaryDark: '#1e40af', success: '#10b981', bg: '#f8fafc',
@@ -25,13 +26,13 @@ const formatRelativeTime = (dateString: string) => {
   const date = new Date(dateString);
   const diff = Math.floor((new Date().getTime() - date.getTime()) / 1000);
   if (diff < 60) return 'Just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+  return `${Math.floor(diff / 86400)} days ago`;
 };
 
 const SyncScreen = () => {
-  const { token, user } = useAuth();
+  const { token, user, isLoggedIn } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -45,6 +46,11 @@ const SyncScreen = () => {
   const [partnerDocuments, setPartnerDocuments] = useState<any[]>([]);
   const [hasDocuments, setHasDocuments] = useState(false);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
+  const [signedUrls, setSignedUrls] = useState<{[key: string]: string}>({});
+  
+  // Download State
+  const [downloadingFiles, setDownloadingFiles] = useState<{[key: string]: boolean}>({});
+  const [downloadedFiles, setDownloadedFiles] = useState<{[key: string]: boolean}>({});
 
   // Input & Settings
   const [emailToLink, setEmailToLink] = useState('');
@@ -77,6 +83,75 @@ const SyncScreen = () => {
     finally { setIsLoading(false); setRefreshing(false); }
   }, [token]);
 
+  // Hàm lấy signed URL cho ảnh/video
+  const fetchSignedUrl = async (docId: string): Promise<string> => {
+    // Check cache first
+    if (signedUrls[docId]) {
+      return signedUrls[docId];
+    }
+
+    try {
+      const response = await fetch(`${API_URL.replace('/auth', '')}/documents/download/${docId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch signed URL');
+      }
+      
+      const data = await response.json();
+      const signedUrl = data.downloadUrl || data.url;
+      
+      // Cache the URL
+      setSignedUrls(prev => ({ ...prev, [docId]: signedUrl }));
+      
+      return signedUrl;
+    } catch (error) {
+      console.error('Error fetching signed URL:', error);
+      return '';
+    }
+  };
+
+  // Hàm tải file tự động
+  const autoDownloadFile = async (doc: any) => {
+    if (downloadedFiles[doc.id] || downloadingFiles[doc.id]) {
+      return; // Already downloaded or downloading
+    }
+
+    // Only auto-download images and videos when auto-download is enabled
+    if (!isAutoDownload || (doc.type !== 'image' && doc.type !== 'video')) {
+      return;
+    }
+
+    setDownloadingFiles(prev => ({ ...prev, [doc.id]: true }));
+
+    try {
+      const signedUrl = await fetchSignedUrl(doc.id);
+      if (!signedUrl) {
+        throw new Error('Failed to get download URL');
+      }
+
+      // For React Native, we'll use FileSystem to download files
+      // You may need to install expo-file-system
+      console.log('Auto-downloading file:', doc.name, 'URL:', signedUrl);
+      
+      // Simulate download completion
+      // In a real implementation, you would use:
+      // import * as FileSystem from 'expo-file-system';
+      // await FileSystem.downloadAsync(signedUrl, FileSystem.documentDirectory + doc.name);
+      
+      setTimeout(() => {
+        setDownloadingFiles(prev => ({ ...prev, [doc.id]: false }));
+        setDownloadedFiles(prev => ({ ...prev, [doc.id]: true }));
+        console.log('Download completed:', doc.name);
+      }, 2000); // Simulate 2 second download
+      
+    } catch (error) {
+      console.error('Auto download error:', error);
+      setDownloadingFiles(prev => ({ ...prev, [doc.id]: false }));
+    }
+  };
+
   const fetchPartnerDocuments = useCallback(async () => {
     if (!isLinked) return;
     setIsLoadingDocuments(true);
@@ -86,15 +161,41 @@ const SyncScreen = () => {
         const data = await res.json();
         setPartnerDocuments(data.documents || []);
         setHasDocuments(data.hasDocuments || false);
+        
+        // Pre-fetch signed URLs for images and videos
+        const mediaDocs = data.documents?.filter((doc: any) => doc.type === 'image' || doc.type === 'video') || [];
+        for (const doc of mediaDocs) {
+          await fetchSignedUrl(doc.id);
+          
+          // Auto-download if enabled
+          if (isAutoDownload) {
+            await autoDownloadFile(doc);
+          }
+        }
       }
     } catch (e) { console.error("Doc fetch error:", e); }
     finally { setIsLoadingDocuments(false); }
-  }, [token, isLinked]);
+  }, [token, isLinked, isAutoDownload]);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
-  useFocusEffect(useCallback(() => { if (isLinked) fetchPartnerDocuments(); }, [fetchPartnerDocuments, isLinked]));
+  useFocusEffect(useCallback(() => { 
+    if (isLoggedIn && user) {
+      fetchData(); 
+    }
+  }, [fetchData, isLoggedIn, user]));
+  
+  useFocusEffect(useCallback(() => { 
+    if (isLoggedIn && user && isLinked) {
+      fetchPartnerDocuments(); 
+    }
+  }, [fetchPartnerDocuments, isLinked, isLoggedIn, user]));
 
-  const onRefresh = () => { setRefreshing(true); fetchData(); if (isLinked) fetchPartnerDocuments(); };
+  const onRefresh = () => { 
+    setRefreshing(true); 
+    if (isLoggedIn && user) {
+      fetchData(); 
+      if (isLinked) fetchPartnerDocuments(); 
+    }
+  };
 
   // --- ACTIONS ---
   const handleLinkAccount = async () => {
@@ -150,6 +251,11 @@ const SyncScreen = () => {
     }]);
   };
 
+  // Nếu chưa đăng nhập -> Hiện màn hình Guest
+  if (!isLoggedIn || !user) {
+    return <GuestPlaceholder title="Sync Center" subtitle="Sign in to manage connections." icon="sync" />;
+  }
+
   if (isLoading && !refreshing && !isLinked && incomingRequests.length === 0) 
     return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>;
 
@@ -202,49 +308,152 @@ const SyncScreen = () => {
               </TouchableOpacity>
             </View>
 
-            {/* Instant Preview */}
-            <Text style={styles.sectionHeader}>INSTANT PREVIEW</Text>
-            {isLoadingDocuments ? (
-              <View style={styles.previewLoadingCard}><ActivityIndicator size="small" color={COLORS.primary} /><Text style={styles.previewLoadingText}>Loading...</Text></View>
-            ) : hasDocuments ? (
-              <View style={styles.previewContainer}>
-                {partnerDocuments.slice(0, 3).map((doc) => (
-                  <View key={doc.id} style={styles.previewItem}>
-                    {doc.type === 'image' && (
-                      <View style={styles.imagePreview}>
-                        <Image 
-                          source={{ 
-                            uri: getDownloadUrl(doc.id),
-                            headers: { 'Authorization': `Bearer ${token}` } // <-- Fix Auth
-                          }} 
-                          style={styles.previewImage}
-                          resizeMode="cover"
-                        />
-                        <View style={styles.previewOverlay}><Icon name="image" size={16} color={COLORS.white} /></View>
-                      </View>
-                    )}
-                    {doc.type === 'video' && (
-                      <View style={[styles.videoPreview, { backgroundColor: '#000' }]}>
-                        <Icon name="play-circle-filled" size={40} color={COLORS.white} />
-                        <Text style={styles.videoDuration}>Video</Text>
-                      </View>
-                    )}
-                    {doc.type === 'link' && (
-                      <View style={styles.linkPreview}><Icon name="link" size={24} color={COLORS.primary} /><Text style={styles.linkText} numberOfLines={2}>{doc.content}</Text></View>
-                    )}
-                    {doc.type === 'text' && (
-                      <View style={styles.textPreview}><Icon name="description" size={24} color={COLORS.success} /><Text style={styles.textPreviewContent} numberOfLines={2}>Note...</Text></View>
-                    )}
-                    {(doc.type === 'file' || doc.type === 'document' || doc.type === 'archive' || doc.type === 'audio') && (
-                      <View style={styles.filePreview}><Icon name="insert-drive-file" size={24} color={COLORS.subText} /><Text style={styles.fileName} numberOfLines={2}>{doc.name}</Text></View>
-                    )}
-                    <Text style={styles.previewTime}>{formatRelativeTime(doc.createdAt)}</Text>
+            {/* Instant Preview - Media Section */}
+            {isAutoView && (
+              <>
+                <Text style={styles.sectionHeader}>MEDIA PREVIEW</Text>
+                {isLoadingDocuments ? (
+                  <View style={styles.previewLoadingCard}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text style={styles.previewLoadingText}>Loading...</Text>
                   </View>
-                ))}
-                {partnerDocuments.length > 3 && <TouchableOpacity style={styles.viewMoreBtn}><Text style={styles.viewMoreText}>View more</Text><Icon name="arrow-forward" size={16} color={COLORS.primary} /></TouchableOpacity>}
-              </View>
-            ) : (
-              <View style={styles.noPreviewCard}><Icon name="folder-open" size={32} color={COLORS.subText} /><Text style={styles.noPreviewText}>No files yet</Text></View>
+                ) : hasDocuments ? (
+                  <View style={styles.previewContainer}>
+                    {/* Filter images and videos */}
+                    {partnerDocuments.filter(doc => doc.type === 'image' || doc.type === 'video').slice(0, 3).map((doc) => (
+                      <View key={doc.id} style={styles.previewItem}>
+                        {doc.type === 'image' && (
+                          <View style={styles.imagePreview}>
+                            <Image 
+                              source={{ 
+                                uri: signedUrls[doc.id] || ''
+                              }} 
+                              style={styles.previewImage}
+                              resizeMode="cover"
+                              onLoad={() => console.log('Image loaded successfully:', doc.id)}
+                              onError={(error) => console.log('Image load error:', error.nativeEvent.error, doc.id)}
+                            />
+                            <View style={styles.previewOverlay}>
+                              {downloadingFiles[doc.id] ? (
+                                <ActivityIndicator size="small" color={COLORS.white} />
+                              ) : downloadedFiles[doc.id] ? (
+                                <Icon name="check-circle" size={16} color={COLORS.success} />
+                              ) : (
+                                <Icon name="image" size={16} color={COLORS.white} />
+                              )}
+                            </View>
+                          </View>
+                        )}
+                        {doc.type === 'video' && (
+                          <View style={[styles.videoPreview, { backgroundColor: '#000' }]}>
+                            <TouchableOpacity 
+                              style={styles.videoPlayButton}
+                              onPress={() => {
+                                // Handle video play - could open in modal or external player
+                                Alert.alert('Video Preview', 'Video playback feature coming soon!');
+                              }}
+                            >
+                              {downloadingFiles[doc.id] ? (
+                                <ActivityIndicator size="small" color={COLORS.white} />
+                              ) : (
+                                <Icon name="play-circle-filled" size={40} color={COLORS.white} />
+                              )}
+                            </TouchableOpacity>
+                            <Text style={styles.videoDuration}>
+                              {downloadingFiles[doc.id] ? 'Downloading...' : 'Video'}
+                            </Text>
+                          </View>
+                        )}
+                        <View style={styles.previewFooter}>
+                          <Text style={styles.previewTime}>{formatRelativeTime(doc.createdAt)}</Text>
+                          {isAutoDownload && !downloadedFiles[doc.id] && !downloadingFiles[doc.id] && (
+                            <TouchableOpacity 
+                              style={styles.downloadBtn}
+                              onPress={() => autoDownloadFile(doc)}
+                            >
+                              <Icon name="download" size={16} color={COLORS.primary} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    ))}
+                    {partnerDocuments.filter(doc => doc.type === 'image' || doc.type === 'video').length > 3 && (
+                      <TouchableOpacity style={styles.viewMoreBtn}>
+                        <Text style={styles.viewMoreText}>View more media</Text>
+                        <Icon name="arrow-forward" size={16} color={COLORS.primary} />
+                      </TouchableOpacity>
+                    )}
+                    {partnerDocuments.filter(doc => doc.type === 'image' || doc.type === 'video').length === 0 && (
+                      <View style={styles.noMediaSection}>
+                        <Icon name="photo-library" size={32} color={COLORS.subText} />
+                        <Text style={styles.noMediaText}>No images or videos</Text>
+                      </View>
+                    )}
+                  </View>
+                ) : (
+                  <View style={styles.noPreviewCard}>
+                    <Icon name="folder-open" size={32} color={COLORS.subText} />
+                    <Text style={styles.noPreviewText}>No files yet</Text>
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Files and Links Section */}
+            {isAutoView && (
+              <>
+                <Text style={styles.sectionHeader}>FILES & LINKS</Text>
+                {isLoadingDocuments ? (
+                  <View style={styles.previewLoadingCard}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text style={styles.previewLoadingText}>Loading...</Text>
+                  </View>
+                ) : hasDocuments ? (
+                  <View style={styles.previewContainer}>
+                    {/* Filter files and links */}
+                    {partnerDocuments.filter(doc => doc.type === 'link' || doc.type === 'text' || doc.type === 'file' || doc.type === 'document' || doc.type === 'archive' || doc.type === 'audio').slice(0, 3).map((doc) => (
+                      <View key={doc.id} style={styles.previewItem}>
+                        {doc.type === 'link' && (
+                          <View style={styles.linkPreview}>
+                            <Icon name="link" size={24} color={COLORS.primary} />
+                            <Text style={styles.linkText} numberOfLines={2}>{doc.content || doc.name}</Text>
+                          </View>
+                        )}
+                        {doc.type === 'text' && (
+                          <View style={styles.textPreview}>
+                            <Icon name="description" size={24} color={COLORS.success} />
+                            <Text style={styles.textPreviewContent} numberOfLines={2}>Note...</Text>
+                          </View>
+                        )}
+                        {(doc.type === 'file' || doc.type === 'document' || doc.type === 'archive' || doc.type === 'audio') && (
+                          <View style={styles.filePreview}>
+                            <Icon name="insert-drive-file" size={24} color={COLORS.subText} />
+                            <Text style={styles.fileName} numberOfLines={2}>{doc.name}</Text>
+                          </View>
+                        )}
+                        <Text style={styles.previewTime}>{formatRelativeTime(doc.createdAt)}</Text>
+                      </View>
+                    ))}
+                    {partnerDocuments.filter(doc => doc.type === 'link' || doc.type === 'text' || doc.type === 'file' || doc.type === 'document' || doc.type === 'archive' || doc.type === 'audio').length > 3 && (
+                      <TouchableOpacity style={styles.viewMoreBtn}>
+                        <Text style={styles.viewMoreText}>View more files</Text>
+                        <Icon name="arrow-forward" size={16} color={COLORS.primary} />
+                      </TouchableOpacity>
+                    )}
+                    {partnerDocuments.filter(doc => doc.type === 'link' || doc.type === 'text' || doc.type === 'file' || doc.type === 'document' || doc.type === 'archive' || doc.type === 'audio').length === 0 && (
+                      <View style={styles.noMediaSection}>
+                        <Icon name="folder" size={32} color={COLORS.subText} />
+                        <Text style={styles.noMediaText}>No files or links</Text>
+                      </View>
+                    )}
+                  </View>
+                ) : (
+                  <View style={styles.noPreviewCard}>
+                    <Icon name="folder-open" size={32} color={COLORS.subText} />
+                    <Text style={styles.noPreviewText}>No files yet</Text>
+                  </View>
+                )}
+              </>
             )}
 
             {/* Settings */}
@@ -384,7 +593,10 @@ const styles = StyleSheet.create({
   previewImage: { width: '100%', height: 120, borderRadius: 12, backgroundColor: '#f8fafc' },
   previewOverlay: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 12, padding: 4 },
   videoPreview: { height: 120, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 8, position: 'relative' },
+  videoPlayButton: { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 25, padding: 5 },
   videoDuration: { position: 'absolute', bottom: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 10, paddingHorizontal: 6, borderRadius: 4 },
+  noMediaSection: { alignItems: 'center', padding: 20, backgroundColor: '#fafafa', borderRadius: 12 },
+  noMediaText: { color: COLORS.subText, fontSize: 14, fontWeight: '600', marginTop: 8 },
   linkPreview: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#eff6ff', padding: 12, borderRadius: 12, marginBottom: 8 },
   linkText: { flex: 1, marginLeft: 12, color: COLORS.primary, fontSize: 13, fontWeight: '500' },
   textPreview: { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#f0fdf4', padding: 12, borderRadius: 12, marginBottom: 8 },
@@ -392,6 +604,8 @@ const styles = StyleSheet.create({
   filePreview: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fafafa', padding: 12, borderRadius: 12, marginBottom: 8 },
   fileName: { flex: 1, marginLeft: 12, color: COLORS.text, fontSize: 13, fontWeight: '500' },
   previewTime: { fontSize: 11, color: COLORS.subText, marginTop: 4 },
+  previewFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  downloadBtn: { padding: 4, borderRadius: 12, backgroundColor: '#f0f9ff' },
   viewMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', padding: 12, borderRadius: 12, marginTop: 8 },
   viewMoreText: { color: COLORS.primary, fontSize: 13, fontWeight: '600', marginRight: 8 },
   noPreviewCard: { backgroundColor: COLORS.white, borderRadius: 16, padding: 32, alignItems: 'center', marginBottom: 24, borderWidth: 1, borderColor: COLORS.border },

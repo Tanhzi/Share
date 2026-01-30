@@ -12,6 +12,7 @@ export interface Document {
   size: string;
   timestamp?: string;
   isProtected?: boolean;
+  url?: string;
 }
 
 interface DocumentCardProps {
@@ -58,7 +59,9 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ document, onPress }) => {
       </View>
       
       <View style={styles.content}>
-        <Text numberOfLines={1} style={styles.title}>{document.name}</Text>
+        <Text numberOfLines={1} style={styles.title}>
+          {document.type === 'link' && document.isProtected ? '***' : document.name}
+        </Text>
         <View style={styles.deviceRow}>
           <Icon name="smartphone" size={14} color={COLORS.slate400} />
           <Text numberOfLines={1} style={styles.deviceText}>{document.ownerDevice}</Text>
@@ -78,7 +81,14 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ document, onPress }) => {
       </View>
 
       <View style={styles.downloadBtn}>
-        <Icon name={document.isProtected ? "lock" : "download"} size={24} color={COLORS.primary} />
+        <Icon 
+          name={
+            document.type === 'link' ? "link" : 
+            document.isProtected ? "lock" : "download"
+          } 
+          size={24} 
+          color={document.type === 'link' ? '#f97316' : COLORS.primary} 
+        />
       </View>
     </TouchableOpacity>
   );
