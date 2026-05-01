@@ -11,10 +11,10 @@ interface GuestPlaceholderProps {
 
 const COLORS = { primary: '#2563EB', slate400: '#94a3b8', text: '#0f172a' };
 
-const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({ 
-  title = "Authentication Required", 
-  subtitle = "Please sign in to access this feature.", 
-  icon = "lock"
+const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({
+  title = 'Authentication Required',
+  subtitle = 'Please sign in to access this feature.',
+  icon = 'lock',
 }) => {
   const navigation = useNavigation<any>();
 
@@ -25,11 +25,10 @@ const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({
       </View>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.subtitle}>{subtitle}</Text>
-      
-      <TouchableOpacity 
+
+      <TouchableOpacity
         style={styles.button}
-        onPress={() => navigation.navigate('Login')}
-      >
+        onPress={() => navigation.navigate('Login')}>
         <Text style={styles.buttonText}>Sign In / Register</Text>
       </TouchableOpacity>
     </View>
@@ -37,15 +36,46 @@ const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, backgroundColor: '#fff' },
-  iconCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center', marginBottom: 24 },
-  title: { fontSize: 20, fontWeight: '900', color: COLORS.text, marginBottom: 8, textAlign: 'center' },
-  subtitle: { fontSize: 16, color: COLORS.slate400, textAlign: 'center', marginBottom: 32, lineHeight: 24 },
-  button: {
-    backgroundColor: COLORS.primary, paddingVertical: 16, paddingHorizontal: 32, 
-    borderRadius: 20, elevation: 4, shadowColor: COLORS.primary, shadowOpacity: 0.3
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+    backgroundColor: '#fff',
   },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' }
+  iconCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#eff6ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: COLORS.text,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: COLORS.slate400,
+    textAlign: 'center',
+    marginBottom: 32,
+    lineHeight: 24,
+  },
+  button: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.3,
+  },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });
 
 export default GuestPlaceholder;

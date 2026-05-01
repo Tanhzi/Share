@@ -1,7 +1,18 @@
-import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, {
+  createContext,
+  useState,
+  useContext,
+  ReactNode,
+  useEffect,
+} from 'react';
+import {
+  saveToSecureStorage,
+  getFromSecureStorage,
+  removeFromSecureStorage,
+} from '../utils/secureStorage';
 
-export const API_URL = 'http://10.0.2.2:5000/api/auth';
+const TOKEN_EXPIRY_KEY = 'tokenExpiry';
+const DEFAULT_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 interface User {
   id: string;
@@ -15,9 +26,10 @@ interface AuthContextType {
   token: string | null;
   user: User | null;
   isLoading: boolean;
-  login: (token: string, user: User) => Promise<void>;
+  login: (token: string, user: User, expiresInMs?: number) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: User) => Promise<void>;
+  isTokenExpired: () => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,10 +42,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const loadStorageData = async () => {
       try {
-        const storedToken = await AsyncStorage.getItem('userToken');
-        const storedUser = await AsyncStorage.getItem('userInfo');
+        const storedToken = await getFromSecureStorage('userToken');
+        const storedUser = await getFromSecureStorage('userInfo');
+        const storedExpiry = await getFromSecureStorage(TOKEN_EXPIRY_KEY);
 
         if (storedToken && storedUser) {
+          if (storedExpiry) {
+            const expiryTime = parseInt(storedExpiry, 10);
+            if (Date.now() > expiryTime) {
+              await removeFromSecureStorage('userToken');
+              await removeFromSecureStorage('userInfo');
+              await removeFromSecureStorage(TOKEN_EXPIRY_KEY);
+              setIsLoading(false);
+              return;
+            }
+          }
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
         }
@@ -47,12 +70,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     loadStorageData();
   }, []);
 
-  const login = async (newToken: string, newUser: User) => {
+  const login = async (
+    newToken: string,
+    newUser: User,
+    expiresInMs?: number
+  ) => {
     setToken(newToken);
     setUser(newUser);
     try {
-      await AsyncStorage.setItem('userToken', newToken);
-      await AsyncStorage.setItem('userInfo', JSON.stringify(newUser));
+      await saveToSecureStorage('userToken', newToken);
+      await saveToSecureStorage('userInfo', JSON.stringify(newUser));
+      const expiryTime = Date.now() + (expiresInMs || DEFAULT_TOKEN_EXPIRY_MS);
+      await saveToSecureStorage(TOKEN_EXPIRY_KEY, String(expiryTime));
     } catch (e) {
       console.error('Failed to save auth data', e);
     }
@@ -62,21 +91,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setToken(null);
     setUser(null);
     try {
-      await AsyncStorage.removeItem('userToken');
-      await AsyncStorage.removeItem('userInfo');
+      await removeFromSecureStorage('userToken');
+      await removeFromSecureStorage('userInfo');
+      await removeFromSecureStorage(TOKEN_EXPIRY_KEY);
     } catch (e) {
       console.error('Failed to remove auth data', e);
     }
   };
 
-  // ✅ ĐÃ DI CHUYỂN RA NGOÀI: updateUser ở cùng cấp với login/logout
   const updateUser = async (updatedUser: User) => {
     setUser(updatedUser);
     try {
-      await AsyncStorage.setItem('userInfo', JSON.stringify(updatedUser));
+      await saveToSecureStorage('userInfo', JSON.stringify(updatedUser));
     } catch (e) {
       console.error('Failed to update user storage', e);
     }
+  };
+
+  const isTokenExpired = (): boolean => {
+    if (!token) return true;
+    return false;
   };
 
   return (
@@ -88,9 +122,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         isLoading,
         login,
         logout,
-        updateUser, 
-      }}
-    >
+        updateUser,
+        isTokenExpired,
+      }}>
       {children}
     </AuthContext.Provider>
   );

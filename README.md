@@ -1,97 +1,168 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# sharedocu
 
-# Getting Started
+Ứng dụng React Native chia sẻ tài liệu theo vị trí gần nhau.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## 📋 Mô tả dự án
 
-## Step 1: Start Metro
+`sharedocu` cho phép người dùng:
+- Quét và khám phá tài liệu trong phạm vi gần (Scanner)
+- Chia sẻ ảnh, video, file, link hoặc text từ thiết bị
+- Thiết lập quyền truy cập: công khai / ẩn danh / có mật khẩu / giới hạn thời gian
+- Quản lý tài liệu đã chia sẻ, đồng bộ với tài khoản khác, cập nhật hồ sơ cá nhân (khi đăng nhập)
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## 🚀 Cài đặt & Chạy dự án
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+### Yêu cầu
+- Node.js >= 20
+- Môi trường React Native cho Android/iOS
 
-```sh
-# Using npm
+### Cài đặt
+```bash
+npm install
+```
+
+### Chạy ứng dụng
+```bash
+# Khởi động Metro bundler
 npm start
 
-# OR using Yarn
-yarn start
-```
-
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
-
-```sh
-# Using npm
+# Chạy trên Android
 npm run android
 
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
+# Chạy trên iOS
 npm run ios
 
-# OR using Yarn
-yarn ios
+# Chạy test
+npm test
+
+# Kiểm tra lint
+npm run lint
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+> **Lưu ý Android**: Nếu gặp lỗi SDK, thử thiết lập biến môi trường:
+> ```powershell
+> $env:ANDROID_HOME = "C:\Users\kaido\AppData\Local\Android\Sdk"
+> npm run android
+> ```
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+## 📁 Cấu trúc thư mục
 
-## Step 3: Modify your app
+```
+src/
+  components/    # UI components tái sử dụng
+  context/       # Auth context và shared state
+  navigation/     # Cấu hình điều hướng (stack/tab)
+  screens/       # Các màn hình chính
+android/          # Native Android project
+ios/            # Native iOS project
+__tests__/      # Test files
+patches/         # Patch-package fixes
+```
 
-Now that you have successfully run the app, let's make changes!
+## 🧭 Điều hướng & Luồng ứng dụng
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+- Entry point: `index.js` → `App.tsx`
+- Root providers: `AuthProvider` + `SafeAreaProvider`
+- Navigation: `AppNavigator.tsx` → `TabNavigator.tsx`
+- Màn hình mặc định: `Scanner` (trong Bottom Tabs)
+- Auth flow: mở khi người dùng chủ động đăng nhập/đăng ký
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+## 🖥️ Các màn hình chính
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+### Scanner (`src/screens/ScannerScreen.tsx`)
+- Xin quyền vị trí, gọi API quét tài liệu gần
+- Hỗ trợ guest và user đã đăng nhập
+- Hiển thị danh sách tài liệu, mở link hoặc tải file
+- Modal xác thực mật khẩu nếu tài liệu được bảo vệ
+- Kiểm tra trạng thái mạng trước khi quét
 
-## Congratulations! :tada:
+### Share Form (`src/screens/ShareForm.tsx`)
+- Chia sẻ: ảnh, video, file, link, text
+- Tùy chọn: public / ẩn danh / mật khẩu / thời hạn
+- Bắt buộc lấy vị trí trước khi upload
 
-You've successfully run and modified your React Native App. :partying_face:
+### My Shares (`src/screens/MySharesScreen.tsx`)
+- Chỉ khả dụng khi đã đăng nhập
+- Xem, tìm kiếm, lọc tài liệu đang chia sẻ
+- Bật/tắt mật khẩu, xóa tài liệu khỏi danh sách
+- Kiểm tra trạng thái mạng trước khi thực hiện các thao tác
 
-### Now what?
+### Sync Center (`src/screens/SyncScreen.tsx`)
+- Kết nối tài khoản khác qua email
+- Xử lý sync request (incoming/outgoing)
+- Xem trạng thái partner, preview tài liệu
+- Cài đặt auto download và instant preview
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+### Profile (`src/screens/ProfileScreen.tsx`)
+- Xem/cập nhật thông tin cá nhân
+- Upload avatar, đổi mật khẩu, đăng xuất
 
-# Troubleshooting
+### Auth (`src/screens/*.tsx`)
+- Đăng nhập, đăng ký, quên mật khẩu, đổi mật khẩu
+- Lưu token và userInfo qua `@react-native-async-storage/async-storage`
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+## 🔌 Backend & API
 
-# Learn More
+Base URL hiện tại (hardcode cho Android Emulator):
+```
+http://10.0.2.2:5000/api
+```
 
-To learn more about React Native, take a look at the following resources:
+### Các nhóm endpoint
+| Nhóm | Chức năng |
+|------|-----------|
+| `/api/auth/*` | login, register, forgot/reset/change password, profile, upload-avatar |
+| `/api/documents/*` | scan, share, verify-password, my-documents, history, download |
+| `/api/sync/*` | status, requests, link, respond, cancel, settings, unlink, documents |
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+> ⚠️ **Lưu ý**: `API_URL` đang hardcode, chưa tách qua file env/config.
+
+## 🛠️ Stack kỹ thuật
+
+| Công nghệ | Phiên bản / Package |
+|-----------|---------------------|
+| React Native | 0.83.1 |
+| React | 19.2.0 |
+| TypeScript | ✅ |
+| Navigation | @react-navigation/native, native-stack, bottom-tabs |
+| Storage | @react-native-async-storage/async-storage |
+| Geolocation | react-native-geolocation-service |
+| File Picker | @react-native-documents/picker |
+| Image Picker | react-native-image-picker |
+| File Utils | react-native-blob-util |
+| Icons | react-native-vector-icons |
+| Backend Client | @supabase/supabase-js, socket.io-client (có trong deps, hiện dùng fetch là chính) |
+
+## ⚠️ Ghi chú kỹ thuật
+
+- `README.md` gốc là template mặc định, chưa phản ánh nghiệp vụ thực tế
+- `API_URL` hardcode → cần cấu hình env cho production
+- App cho phép guest mode, auth chỉ bắt buộc với tính năng cá nhân hóa
+- Mã nguồn còn nhiều debug log và một số chuỗi tiếng Việt lỗi encoding
+- `SyncScreen`: một số logic tải file chưa hoàn thiện end-to-end
+- Test coverage còn thấp, mới có `__tests__/App.test.tsx`
+
+## 📚 File tham khảo khi tiếp quản
+
+1. `src/context/AuthContext.tsx`
+2. `src/navigation/AppNavigator.tsx`
+3. `src/navigation/TabNavigator.tsx`
+4. `src/screens/ScannerScreen.tsx`
+5. `src/screens/ShareFormScreen.tsx`
+6. `src/screens/MySharesScreen.tsx`
+7. `src/screens/SyncScreen.tsx`
+
+## 🧪 Scripts hữu ích (package.json)
+
+| Lệnh | Mô tả |
+|------|-------|
+| `npm start` | Khởi động Metro bundler |
+| `npm run android` | Build & chạy Android |
+| `npm run ios` | Build & chạy iOS |
+| `npm test` | Chạy Jest tests |
+| `npm run lint` | Kiểm tra ESLint |
+| `npm run postinstall` | Áp dụng patch-package |
+
+## 📄 License
+
+MIT

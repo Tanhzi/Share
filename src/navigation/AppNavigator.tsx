@@ -21,7 +21,13 @@ const AppNavigator = () => {
   // 1. Màn hình chờ (Splash) khi đang đọc dữ liệu từ máy
   if (isLoading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#fff',
+        }}>
         <ActivityIndicator size="large" color="#2563EB" />
       </View>
     );
@@ -29,26 +35,27 @@ const AppNavigator = () => {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator 
+      <Stack.Navigator
         // 2. SỬA LẠI LOGIC: Luôn luôn bắt đầu từ MainApp (chứa Scanner)
         // Bất kể đã đăng nhập hay chưa
-        initialRouteName="MainApp" 
-        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
-      >
-        
+        initialRouteName="MainApp"
+        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
         {/* MainApp: Chứa TabBar (Scanner, MyShares, Sync...) */}
         {/* Bên trong TabNavigator, Scanner được đặt là tab đầu tiên nên sẽ hiện ra trước */}
         <Stack.Screen name="MainApp" component={TabNavigator} />
-        
+
         {/* Các màn hình Auth (Chỉ hiện khi người dùng chủ động bấm vào nút Sign In) */}
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
         <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-        
-        {/* Các màn hình chức năng khác */}
-        <Stack.Screen name="ShareForm" component={ShareFormScreen} options={{ presentation: 'modal' }} />
-        <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
 
+        {/* Các màn hình chức năng khác */}
+        <Stack.Screen
+          name="ShareForm"
+          component={ShareFormScreen}
+          options={{ presentation: 'modal' }}
+        />
+        <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

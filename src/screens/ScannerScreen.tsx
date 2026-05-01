@@ -1,36 +1,56 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+} from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView,
-  Animated, Easing, Modal, TextInput, Alert, KeyboardAvoidingView, Platform,
-  PermissionsAndroid, RefreshControl, ActivityIndicator, Linking
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  ScrollView,
+  Animated,
+  Easing,
+  RefreshControl,
+  ActivityIndicator,
+  Linking,
+  Alert,
+  Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import DocumentCard from '../components/DocumentCard';
 import Geolocation from 'react-native-geolocation-service';
-import { useAuth, API_URL } from '../context/AuthContext';
+import DocumentCard from '../components/DocumentCard';
+import { useAuth } from '../context/AuthContext';
+import { DOCUMENT_URL } from '../config/env';
 import { useFocusEffect } from '@react-navigation/native';
-
-// Thư viện tải file
 import ReactNativeBlobUtil from 'react-native-blob-util';
+import { PasswordModal } from '../components/PasswordModal';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { apiGet, apiPost } from '../api/client';
 
-const DOC_URL = API_URL.replace('/auth', '/documents');
+const DOC_URL = DOCUMENT_URL;
 const FILTER_TYPES = ['All', 'PDF', 'Images', 'Videos', 'Archives', 'Docs'];
-const COLORS = { primary: '#2563EB', text: '#0f172a', secondary: '#10b981', bg: '#f8fafc', white: '#fff', slate400: '#94a3b8', danger: '#ef4444' };
+const COLORS = {
+  primary: '#2563EB',
+  text: '#0f172a',
+  secondary: '#10b981',
+  bg: '#f8fafc',
+  white: '#fff',
+  slate400: '#94a3b8',
+  danger: '#ef4444',
+};
 
-// Hàm tính khoảng cách giữa 2 tọa độ (Haversine Formula)
-const getDistanceFromLatLonInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371e3; // Bán kính trái đất (mét)
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c); // Trả về mét (số nguyên)
+const getScanNetworkErrorMessage = () => {
+  return 'Không thể kết nối server. Kiểm tra backend và API_URL.';
 };
 
 const ScannerScreen = ({ navigation }: any) => {
   const { token } = useAuth();
+  const { isConnected } = useNetworkStatus();
 
   // Animation
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -40,7 +60,6 @@ const ScannerScreen = ({ navigation }: any) => {
   const [documents, setDocuments] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; long: number } | null>(null);
 
   // Filter State
   const [showFilter, setShowFilter] = useState(false);
@@ -49,98 +68,17 @@ const ScannerScreen = ({ navigation }: any) => {
   // Password Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
-  const [passwordInput, setPasswordInput] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-
-  // --- 1. HÀM XIN QUYỀN VÀ LẤY VỊ TRÍ ---
-  const getCurrentLocation = async (): Promise<{ latitude: number; longitude: number } | null> => {
-    if (Platform.OS === 'android') {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        Alert.alert("Permission Denied", "Location is needed to scan nearby files.");
-        return null;
-      }
-    }
-
-    return new Promise((resolve) => {
-      Geolocation.getCurrentPosition(
-        (pos) => resolve(pos.coords),
-        (err) => {
-          console.log(err);
-          Alert.alert("GPS Error", "Could not get location.");
-          resolve(null);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-      );
-    });
-  };
-
-  // --- 2. GỌI API SCAN ---
-  const handleScan = async () => {
-    setIsLoading(true);
-    try {
-      const coords = await getCurrentLocation();
-      if (!coords) {
-        setIsLoading(false);
-        setRefreshing(false);
-        return;
-      }
-
-      setCurrentLocation({ lat: coords.latitude, long: coords.longitude });
-
-      // Use public endpoint for anonymous users, authenticated endpoint for logged-in users
-      const scanEndpoint = token ? '/scan' : '/scan-public';
-      const headers: any = {};
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const res = await fetch(`${DOC_URL}${scanEndpoint}?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`, {
-        headers
-      });
-
-      const data = await res.json();
-
-      if (res.ok) {
-        const mappedDocs = data.documents.map((doc: any) => {
-          // Giả lập khoảng cách nếu DB chưa trả về tọa độ file
-          const distanceVal = Math.floor(Math.random() * 30) + 1;
-
-          return {
-            id: doc.id,
-            name: doc.name,
-            type: getFileType(doc.file_type),
-            ownerDevice: doc.is_anonymous ? 'Anonymous' : 'Unknown Device',
-            distance: `${distanceVal}m`,
-            size: formatBytes(doc.file_size),
-            isProtected: doc.is_protected,
-            url: doc.file_url
-          };
-        });
-        setDocuments(mappedDocs);
-      } else {
-        console.error("Scan failed:", data);
-        Alert.alert("Error", "Failed to scan documents.");
-      }
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Error", "Network request failed.");
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
-    }
-  };
 
   // Helper: Format Bytes
   const formatBytes = (bytes: number, decimals = 2) => {
     if (!+bytes) return '0 Bytes';
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    if (bytes === 0) return '0 Bytes';
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
   };
 
   // Helper: Convert DB type to UI type
@@ -154,50 +92,121 @@ const ScannerScreen = ({ navigation }: any) => {
   };
 
   // Helper: Check if document is a link type
-  const isLinkDocument = (doc: any) => {
-    return doc.type === 'link';
-  };
+  const isLinkDocument = (doc: any) => doc.type === 'link';
 
-  // Helper: Check if string is a valid URL
-  const isUrl = (string: string) => {
-    try {
-      new URL(string);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  // Helper: Normalize URL to ensure it's valid
+  // Helper: Normalize URL
   const normalizeUrl = (url: string) => {
     if (!url) return url;
-    
-    // If URL doesn't start with http:// or https://, add https://
     if (!url.match(/^https?:\/\//)) {
       url = 'https://' + url;
     }
-    
     try {
-      // Validate URL
       const urlObj = new URL(url);
       return urlObj.toString();
-    } catch (error) {
-      console.log("Invalid URL:", url);
+    } catch {
       return null;
     }
   };
 
-  // --- 3. HÀM TẢI FILE ---
+  const getCurrentLocation = useCallback(async (): Promise<{
+    latitude: number;
+    longitude: number;
+  } | null> => {
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      );
+
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert(
+          'Permission Denied',
+          'Location is needed to scan nearby documents.'
+        );
+        return null;
+      }
+    }
+
+    return new Promise(resolve => {
+      Geolocation.getCurrentPosition(
+        position => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        error => {
+          console.error('GPS Error:', error);
+          Alert.alert('GPS Error', 'Could not get your current location.');
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      );
+    });
+  }, []);
+
+  // --- 1. GỌI API SCAN ---
+  const handleScan = useCallback(async () => {
+    if (!isConnected) {
+      Alert.alert(
+        'No Internet Connection',
+        'Please check your network connection and try again.'
+      );
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const coords = await getCurrentLocation();
+      if (!coords) {
+        return;
+      }
+
+      const scanEndpoint = token ? '/scan' : '/scan-public';
+      const scanUrl = `${DOC_URL}${scanEndpoint}?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`;
+
+      const res = await apiGet(scanUrl, token ?? undefined) as any;
+      const data = res as { documents?: any[] };
+
+      if (Array.isArray(data?.documents)) {
+        const mappedDocs = data.documents.map((doc: any) => {
+          const distanceVal = Math.floor(Math.random() * 30) + 1;
+          return {
+            id: doc.id,
+            name: doc.name,
+            type: getFileType(doc.file_type),
+            ownerDevice: doc.is_anonymous ? 'Anonymous' : 'Unknown Device',
+            distance: `${distanceVal}m`,
+            size: formatBytes(doc.file_size),
+            isProtected: doc.is_protected,
+            url: doc.file_url,
+          };
+        });
+        setDocuments(mappedDocs);
+      } else {
+        console.error('Scan failed:', data);
+        Alert.alert('Error', 'Failed to scan documents.');
+      }
+    } catch (error) {
+      console.error('Scan failed:', error);
+      Alert.alert('Error', getScanNetworkErrorMessage());
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  }, [token, isConnected, getCurrentLocation]);
+
+  // --- 2. TẢI FILE ---
   const downloadFile = async (url: string, fileName: string) => {
     const { dirs } = ReactNativeBlobUtil.fs;
-    const path = Platform.OS === 'ios'
-      ? `${dirs.DocumentDir}/${fileName}`
-      : `${dirs.DownloadDir}/${fileName}`;
+    const path =
+      Platform.OS === 'ios'
+        ? `${dirs.DocumentDir}/${fileName}`
+        : `${dirs.DownloadDir}/${fileName}`;
 
-    Alert.alert("Downloading", `Starting download for ${fileName}...`);
+    Alert.alert('Downloading', `Starting download for ${fileName}...`);
 
     try {
-      const res = await ReactNativeBlobUtil.config({
+      await ReactNativeBlobUtil.config({
         fileCache: true,
         addAndroidDownloads: {
           useDownloadManager: true,
@@ -206,232 +215,92 @@ const ScannerScreen = ({ navigation }: any) => {
           description: 'Downloading document from ShareApp',
           title: fileName,
           mediaScannable: true,
-        }
+        },
       }).fetch('GET', url);
-
-      Alert.alert("Success", `File saved to: ${res.path()}`);
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Error", "Download failed.");
+      Alert.alert('Success', `File saved to: ${path}`);
+    } catch {
+      Alert.alert('Error', 'Download failed.');
     }
   };
 
-  // --- 4. XỬ LÝ NHẤN VÀO TÀI LIỆU ---
+  // --- 3. XỬ LÝ NHẤN VÀO TÀI LIỆU ---
   const handleDocumentPress = async (doc: any) => {
-    // Chỉ xử lý link nếu tài liệu là dạng link
     if (isLinkDocument(doc)) {
-      console.log("Link document clicked:", doc);
-      console.log("Original URL:", doc.url);
-      
-      // Kiểm tra nếu có URL
       if (!doc.url) {
-        Alert.alert("Error", "No URL available for this link");
+        Alert.alert('Error', 'No URL available for this link');
         return;
       }
-      
-      // Nếu link được bảo vệ, yêu cầu nhập mật khẩu
       if (doc.isProtected) {
         setSelectedDoc(doc);
-        setPasswordInput('');
         setModalVisible(true);
         return;
       }
-      
-      // Chuẩn hóa URL
       const normalizedUrl = normalizeUrl(doc.url);
-      console.log("Normalized URL:", normalizedUrl);
-      
       if (!normalizedUrl) {
-        Alert.alert("Error", `Invalid URL format: ${doc.url}`);
+        Alert.alert('Error', `Invalid URL format: ${doc.url}`);
         return;
       }
-      
       try {
         const supported = await Linking.canOpenURL(normalizedUrl);
-        console.log("Can open URL:", supported);
-        
         if (supported) {
           await Linking.openURL(normalizedUrl);
         } else {
-          Alert.alert("Error", `Cannot open this URL: ${normalizedUrl}`);
+          Alert.alert('Error', `Cannot open this URL: ${normalizedUrl}`);
         }
-      } catch (error) {
-        console.error("Error opening URL:", error);
-        Alert.alert("Error", `Failed to open link: ${normalizedUrl}`);
+      } catch {
+        Alert.alert('Error', `Failed to open link: ${normalizedUrl}`);
       }
       return;
     }
 
-    // Xử lý tài liệu thông thường (tải về)
     if (doc.isProtected) {
       setSelectedDoc(doc);
-      setPasswordInput('');
       setModalVisible(true);
     } else {
-      // Không cần mật khẩu → gọi verify với pass rỗng để lấy link chính thức
-      checkPasswordAndDownload(doc.id, doc.name, "");
+      checkPasswordAndDownload(doc.id, doc.name, '');
     }
   };
 
-  // --- 5. GỌI API XÁC THỰC MẬT KHẨU & XỬ LÝ TÀI LIỆU ---
-  const checkPasswordAndDownload = async (docId: string, docName: string, password: string) => {
+  // --- 4. XÁC THỰC MẬT KHẨU & TẢI FILE ---
+  const checkPasswordAndDownload = async (
+    docId: string,
+    docName: string,
+    password: string
+  ) => {
     setIsVerifying(true);
     try {
-      // For protected links, try to open directly if server fails
-      if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
-        console.log("Attempting direct link access for protected link due to potential server issues");
-        
-        // Try to open the original URL directly as a fallback
-        const normalizedUrl = normalizeUrl(selectedDoc.url);
-        if (normalizedUrl) {
-          try {
-            const supported = await Linking.canOpenURL(normalizedUrl);
-            if (supported) {
-              setModalVisible(false);
-              await Linking.openURL(normalizedUrl);
-              return;
-            }
-          } catch (error) {
-            console.error("Direct link access failed:", error);
-          }
-        }
-      }
+      const verifyEndpoint = token
+        ? '/verify-password'
+        : '/verify-password-public';
 
-      // Use public endpoint for anonymous users, authenticated endpoint for logged-in users
-      const verifyEndpoint = token ? '/verify-password' : '/verify-password-public';
-      const headers: any = {
-        'Content-Type': 'application/json'
-      };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
+      const data = await apiPost(
+        `${DOC_URL}${verifyEndpoint}`,
+        { documentId: docId, password },
+        token ?? undefined
+      ) as { downloadUrl?: string; message?: string };
 
-      const requestBody = JSON.stringify({ documentId: docId, password });
-      console.log("Password verification request URL:", `${DOC_URL}${verifyEndpoint}`);
-      console.log("Password verification request body:", requestBody);
-      console.log("Document ID:", docId);
-      console.log("Password provided:", password ? "***" : "empty");
-
-      const res = await fetch(`${DOC_URL}${verifyEndpoint}`, {
-        method: 'POST',
-        headers,
-        body: requestBody
-      });
-
-      console.log("Password verification response status:", res.status);
-      console.log("Password verification response ok:", res.ok);
-
-      let data;
-      try {
-        data = await res.json();
-        console.log("Password verification response data:", data);
-      } catch (parseError) {
-        console.error("Error parsing response JSON:", parseError);
-        console.log("Response text:", await res.text());
-      }
-
-      if (res.ok && data && data.downloadUrl) {
+      if (data && data.downloadUrl) {
         setModalVisible(false);
-        
-        // Kiểm tra xem tài liệu có phải là link không
         if (selectedDoc && isLinkDocument(selectedDoc)) {
-          // Xử lý link sau khi xác thực mật khẩu
           const normalizedUrl = normalizeUrl(data.downloadUrl);
           if (normalizedUrl) {
-            try {
-              const supported = await Linking.canOpenURL(normalizedUrl);
-              if (supported) {
-                await Linking.openURL(normalizedUrl);
-              } else {
-                Alert.alert("Error", `Cannot open this URL: ${normalizedUrl}`);
-              }
-            } catch (error) {
-              console.error("Error opening URL:", error);
-              Alert.alert("Error", `Failed to open link: ${normalizedUrl}`);
-            }
-          } else {
-            Alert.alert("Error", `Invalid URL format: ${data.downloadUrl}`);
+            await Linking.openURL(normalizedUrl);
           }
         } else {
-          // Xử lý tài liệu thông thường (tải về)
           await downloadFile(data.downloadUrl, docName);
         }
       } else {
-        // Better error handling for different response scenarios
-        if (!res.ok) {
-          if (res.status === 500) {
-            // For protected links with 500 error, try direct access as last resort
-            if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
-              Alert.alert(
-                "Server Error", 
-                "Server is having issues. Would you like to try opening the link directly?",
-                [
-                  {
-                    text: "Cancel",
-                    style: "cancel"
-                  },
-                  {
-                    text: "Try Direct Access",
-                    onPress: async () => {
-                      setModalVisible(false);
-                      const normalizedUrl = normalizeUrl(selectedDoc.url);
-                      if (normalizedUrl) {
-                        try {
-                          await Linking.openURL(normalizedUrl);
-                        } catch (error) {
-                          Alert.alert("Error", "Failed to open link directly.");
-                        }
-                      }
-                    }
-                  }
-                ]
-              );
-            } else {
-              Alert.alert("Error", "Server error. Please try again later.");
-            }
-          } else if (res.status === 401) {
-            Alert.alert("Error", "Invalid password. Please try again.");
-          } else if (res.status === 404) {
-            Alert.alert("Error", "Document not found.");
-          } else {
-            Alert.alert("Error", data?.message || `Server error (${res.status}).`);
-          }
-        } else {
-          Alert.alert("Error", data?.message || "No download URL received.");
-        }
+        Alert.alert('Error', data?.message || 'Server error');
       }
-    } catch (error) {
-      console.error("Verify password error:", error);
-      
-      // For network errors with protected links, offer direct access
-      if (selectedDoc && isLinkDocument(selectedDoc) && selectedDoc.url) {
-        Alert.alert(
-          "Network Error", 
-          "Cannot connect to server. Would you like to try opening the link directly?",
-          [
-            {
-              text: "Cancel",
-              style: "cancel"
-            },
-            {
-              text: "Try Direct Access",
-              onPress: async () => {
-                setModalVisible(false);
-                const normalizedUrl = normalizeUrl(selectedDoc.url);
-                if (normalizedUrl) {
-                  try {
-                    await Linking.openURL(normalizedUrl);
-                  } catch (error) {
-                    Alert.alert("Error", "Failed to open link directly.");
-                  }
-                }
-              }
-            }
-          ]
-        );
-      } else {
-        Alert.alert("Error", "Network error verifying password.");
-      }
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error.message === 'Invalid password'
+          ? 'Invalid password'
+          : error.message === 'Document not found'
+          ? 'Document not found'
+          : 'Network error verifying password.'
+      );
     } finally {
       setIsVerifying(false);
     }
@@ -441,7 +310,7 @@ const ScannerScreen = ({ navigation }: any) => {
   useFocusEffect(
     useCallback(() => {
       handleScan();
-    }, [])
+    }, [handleScan])
   );
 
   const onRefresh = () => {
@@ -450,32 +319,51 @@ const ScannerScreen = ({ navigation }: any) => {
   };
 
   useEffect(() => {
-    Animated.loop(
+    const pulseLoop = Animated.loop(
       Animated.timing(pulseAnim, {
         toValue: 1,
         duration: 2500,
         easing: Easing.out(Easing.ease),
-        useNativeDriver: true
+        useNativeDriver: true,
       })
-    ).start();
+    );
 
-    Animated.loop(
+    const bounceLoop = Animated.loop(
       Animated.sequence([
-        Animated.timing(bounceAnim, { toValue: -8, duration: 1000, useNativeDriver: true }),
-        Animated.timing(bounceAnim, { toValue: 0, duration: 1000, useNativeDriver: true })
+        Animated.timing(bounceAnim, {
+          toValue: -8,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(bounceAnim, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
       ])
-    ).start();
-  }, []);
+    );
+
+    pulseLoop.start();
+    bounceLoop.start();
+
+    return () => {
+      pulseLoop.stop();
+      bounceLoop.stop();
+    };
+  }, [bounceAnim, pulseAnim]);
 
   // --- FILTER LOGIC ---
   const filteredDocs = useMemo(() => {
     if (activeFilter === 'All') return documents;
     return documents.filter(doc => {
       if (activeFilter === 'PDF') return doc.type === 'pdf';
-      if (activeFilter === 'Images') return ['jpg', 'png', 'jpeg'].includes(doc.type);
+      if (activeFilter === 'Images')
+        return ['jpg', 'png', 'jpeg'].includes(doc.type);
       if (activeFilter === 'Videos') return ['mp4', 'mov'].includes(doc.type);
-      if (activeFilter === 'Docs') return ['docx', 'txt', 'doc', 'file'].includes(doc.type);
-      if (activeFilter === 'Archives') return ['zip', 'rar', '7z'].includes(doc.type);
+      if (activeFilter === 'Docs')
+        return ['docx', 'txt', 'doc', 'file'].includes(doc.type);
+      if (activeFilter === 'Archives')
+        return ['zip', 'rar', '7z'].includes(doc.type);
       return true;
     });
   }, [activeFilter, documents]);
@@ -488,8 +376,21 @@ const ScannerScreen = ({ navigation }: any) => {
         <View style={{ alignItems: 'center', flex: 1 }}>
           <Text style={styles.headerTitle}>Proximity Scanner</Text>
           <View style={styles.statusRow}>
-            <View style={[styles.dot, { backgroundColor: isLoading ? COLORS.danger : COLORS.secondary }]} />
-            <Text style={styles.statusText}>{isLoading ? 'Scanning...' : 'Location Active'}</Text>
+            <View
+              style={[
+                styles.dot,
+                {
+                  backgroundColor: isLoading
+                    ? COLORS.danger
+                    : isConnected
+                    ? COLORS.secondary
+                    : COLORS.danger,
+                },
+              ]}
+            />
+            <Text style={styles.statusText}>
+              {isLoading ? 'Scanning...' : isConnected ? 'Online' : 'Offline'}
+            </Text>
           </View>
         </View>
         <TouchableOpacity style={styles.iconBtn} onPress={handleScan}>
@@ -500,8 +401,9 @@ const ScannerScreen = ({ navigation }: any) => {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }>
         {/* Radar UI */}
         <View style={styles.radarContainer}>
           <View style={styles.radiusBadge}>
@@ -514,9 +416,20 @@ const ScannerScreen = ({ navigation }: any) => {
           <View style={styles.radarLineV} />
 
           {[0, 800, 1600].map((delay, index) => {
-            const scale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1.4] });
-            const opacity = pulseAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.6, 0.3, 0] });
-            return <Animated.View key={index} style={[styles.pulseRing, { transform: [{ scale }], opacity }]} />;
+            const scale = pulseAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.3, 1.4],
+            });
+            const opacity = pulseAnim.interpolate({
+              inputRange: [0, 0.5, 1],
+              outputRange: [0.6, 0.3, 0],
+            });
+            return (
+              <Animated.View
+                key={index}
+                style={[styles.pulseRing, { transform: [{ scale }], opacity }]}
+              />
+            );
           })}
 
           <View style={styles.userDot}>
@@ -524,7 +437,15 @@ const ScannerScreen = ({ navigation }: any) => {
           </View>
 
           {filteredDocs.length > 0 && (
-            <Animated.View style={[styles.deviceDot, { top: '25%', right: '25%', transform: [{ translateY: bounceAnim }] }]}>
+            <Animated.View
+              style={[
+                styles.deviceDot,
+                {
+                  top: '25%',
+                  right: '25%',
+                  transform: [{ translateY: bounceAnim }],
+                },
+              ]}>
               <Text style={styles.deviceCount}>{filteredDocs.length}</Text>
             </Animated.View>
           )}
@@ -534,13 +455,21 @@ const ScannerScreen = ({ navigation }: any) => {
         <View style={styles.listHeader}>
           <View>
             <Text style={styles.sectionTitle}>NEARBY DOCUMENTS</Text>
-            <Text style={styles.subTitle}>Found {filteredDocs.length} items nearby</Text>
+            <Text style={styles.subTitle}>
+              Found {filteredDocs.length} items nearby
+            </Text>
           </View>
           <TouchableOpacity
-            style={[styles.iconBtn, showFilter && { backgroundColor: COLORS.primary }]}
-            onPress={() => setShowFilter(!showFilter)}
-          >
-            <Icon name="filter-list" size={24} color={showFilter ? '#fff' : COLORS.text} />
+            style={[
+              styles.iconBtn,
+              showFilter && { backgroundColor: COLORS.primary },
+            ]}
+            onPress={() => setShowFilter(!showFilter)}>
+            <Icon
+              name="filter-list"
+              size={24}
+              color={showFilter ? '#fff' : COLORS.text}
+            />
           </TouchableOpacity>
         </View>
 
@@ -548,13 +477,21 @@ const ScannerScreen = ({ navigation }: any) => {
         {showFilter && (
           <View style={styles.filterBar}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {FILTER_TYPES.map((type) => (
+              {FILTER_TYPES.map(type => (
                 <TouchableOpacity
                   key={type}
-                  style={[styles.filterChip, activeFilter === type && styles.filterChipActive]}
-                  onPress={() => setActiveFilter(type)}
-                >
-                  <Text style={[styles.filterText, activeFilter === type && styles.filterTextActive]}>{type}</Text>
+                  style={[
+                    styles.filterChip,
+                    activeFilter === type && styles.filterChipActive,
+                  ]}
+                  onPress={() => setActiveFilter(type)}>
+                  <Text
+                    style={[
+                      styles.filterText,
+                      activeFilter === type && styles.filterTextActive,
+                    ]}>
+                    {type}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -564,114 +501,215 @@ const ScannerScreen = ({ navigation }: any) => {
         {/* Document List */}
         <View style={{ gap: 12 }}>
           {isLoading && !refreshing && documents.length === 0 ? (
-            <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
+            <ActivityIndicator
+              size="large"
+              color={COLORS.primary}
+              style={{ marginTop: 20 }}
+            />
           ) : filteredDocs.length > 0 ? (
             filteredDocs.map(doc => (
-              <DocumentCard key={doc.id} document={doc} onPress={() => handleDocumentPress(doc)} />
+              <DocumentCard
+                key={doc.id}
+                document={doc}
+                onPress={() => handleDocumentPress(doc)}
+              />
             ))
           ) : (
             <View style={{ alignItems: 'center', marginTop: 20 }}>
-              <Icon name="wifi-tethering-off" size={48} color={COLORS.slate400} />
-              <Text style={{ textAlign: 'center', marginTop: 10, color: COLORS.slate400 }}>No documents found nearby.</Text>
+              <Icon
+                name="wifi-tethering-off"
+                size={48}
+                color={COLORS.slate400}
+              />
+              <Text
+                style={{
+                  textAlign: 'center',
+                  marginTop: 10,
+                  color: COLORS.slate400,
+                }}>
+                No documents found nearby.
+              </Text>
             </View>
           )}
         </View>
       </ScrollView>
 
       {/* FAB - Share Button */}
-      <TouchableOpacity style={styles.shareFab} onPress={() => navigation.navigate('ShareForm')}>
+      <TouchableOpacity
+        style={styles.shareFab}
+        onPress={() => navigation.navigate('ShareForm')}>
         <Icon name="add" size={24} color="#fff" />
         <Text style={styles.fabText}>Share</Text>
       </TouchableOpacity>
 
       {/* Modal Password */}
-      <Modal visible={modalVisible} transparent animationType="fade">
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalIconCircle}>
-              <Icon name="lock" size={32} color="#f59e0b" />
-            </View>
-            <Text style={styles.modalTitle}>Password Required</Text>
-            <Text style={styles.modalSubtitle}>This document is protected.</Text>
-            <TextInput
-              style={styles.passwordInput}
-              placeholder="Enter Password"
-              secureTextEntry
-              autoFocus
-              value={passwordInput}
-              onChangeText={setPasswordInput}
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.cancelBtn]}
-                onPress={() => setModalVisible(false)}
-                disabled={isVerifying}
-              >
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.confirmBtn]}
-                onPress={() => checkPasswordAndDownload(selectedDoc.id, selectedDoc.name, passwordInput)}
-                disabled={isVerifying}
-              >
-                {isVerifying ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.confirmBtnText}>
-                    {selectedDoc && isLinkDocument(selectedDoc) ? 'Unlock & Open Link' : 'Unlock & Download'}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <PasswordModal
+        visible={modalVisible}
+        onClose={() => setModalVisible(false)}
+        onVerify={pwd => {
+          if (selectedDoc) {
+            checkPasswordAndDownload(selectedDoc.id, selectedDoc.name, pwd);
+          }
+        }}
+        isLoading={isVerifying}
+        docName={selectedDoc?.name}
+        isLink={selectedDoc ? isLinkDocument(selectedDoc) : false}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
   headerTitle: { fontSize: 16, fontWeight: 'bold', color: COLORS.text },
   iconBtn: { padding: 8, borderRadius: 50, backgroundColor: '#f1f5f9' },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
   dot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 10, color: COLORS.secondary, fontWeight: 'bold' },
   filterBar: { marginBottom: 16 },
-  filterChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#fff', marginRight: 8, borderWidth: 1, borderColor: '#e2e8f0' },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
   filterChipActive: { backgroundColor: COLORS.text, borderColor: COLORS.text },
   filterText: { fontSize: 12, fontWeight: 'bold', color: COLORS.slate400 },
   filterTextActive: { color: '#fff' },
   content: { padding: 24, paddingBottom: 100 },
-  radarContainer: { height: 320, width: '100%', backgroundColor: '#fff', borderRadius: 32, marginBottom: 24, position: 'relative', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', elevation: 3 },
-  radiusBadge: { position: 'absolute', top: 16, right: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: '#eff6ff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, gap: 4, zIndex: 10 },
+  radarContainer: {
+    height: 320,
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 32,
+    marginBottom: 24,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    elevation: 3,
+  },
+  radiusBadge: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
+    zIndex: 10,
+  },
   radiusText: { fontSize: 10, fontWeight: 'bold', color: COLORS.primary },
-  staticRingLarge: { position: 'absolute', width: 260, height: 260, borderRadius: 130, borderWidth: 1, borderColor: '#f1f5f9' },
-  staticRingMedium: { position: 'absolute', width: 160, height: 160, borderRadius: 80, borderWidth: 1, borderColor: '#f1f5f9' },
-  pulseRing: { position: 'absolute', width: 200, height: 200, borderRadius: 100, borderWidth: 2, borderColor: 'rgba(37, 99, 235, 0.3)', backgroundColor: 'rgba(37, 99, 235, 0.05)' },
-  radarLineH: { position: 'absolute', width: '100%', height: 1, backgroundColor: '#f1f5f9' },
-  radarLineV: { position: 'absolute', height: '100%', width: 1, backgroundColor: '#f1f5f9' },
-  userDot: { width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', elevation: 10, borderWidth: 4, borderColor: '#fff', zIndex: 5 },
-  deviceDot: { position: 'absolute', width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff', elevation: 5, zIndex: 5 },
+  staticRingLarge: {
+    position: 'absolute',
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  staticRingMedium: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  pulseRing: {
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    borderWidth: 2,
+    borderColor: 'rgba(37, 99, 235, 0.3)',
+    backgroundColor: 'rgba(37, 99, 235, 0.05)',
+  },
+  radarLineH: {
+    position: 'absolute',
+    width: '100%',
+    height: 1,
+    backgroundColor: '#f1f5f9',
+  },
+  radarLineV: {
+    position: 'absolute',
+    height: '100%',
+    width: 1,
+    backgroundColor: '#f1f5f9',
+  },
+  userDot: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 10,
+    borderWidth: 4,
+    borderColor: '#fff',
+    zIndex: 5,
+  },
+  deviceDot: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    elevation: 5,
+    zIndex: 5,
+  },
   deviceCount: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
-  listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 16 },
-  sectionTitle: { fontSize: 14, fontWeight: '900', color: COLORS.text, letterSpacing: 0.5 },
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: COLORS.text,
+    letterSpacing: 0.5,
+  },
   subTitle: { fontSize: 12, color: COLORS.slate400, marginTop: 2 },
-  shareFab: { position: 'absolute', bottom: 32, right: 24, flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.secondary, paddingVertical: 16, paddingHorizontal: 24, borderRadius: 24, gap: 8, elevation: 8 },
+  shareFab: {
+    position: 'absolute',
+    bottom: 32,
+    right: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.secondary,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 24,
+    gap: 8,
+    elevation: 8,
+  },
   fabText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalContent: { width: '100%', backgroundColor: '#fff', borderRadius: 24, padding: 24, alignItems: 'center', elevation: 10 },
-  modalIconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fffbeb', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#0f172a', marginBottom: 8 },
-  modalSubtitle: { fontSize: 14, color: '#64748b', textAlign: 'center', marginBottom: 24 },
-  passwordInput: { width: '100%', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, padding: 16, fontSize: 16, marginBottom: 24, textAlign: 'center' },
-  modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
-  modalBtn: { flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
-  cancelBtn: { backgroundColor: '#f1f5f9' },
-  confirmBtn: { backgroundColor: '#2563EB' },
-  cancelBtnText: { fontWeight: 'bold', color: '#64748b' },
-  confirmBtnText: { fontWeight: 'bold', color: '#fff' },
 });
 
 export default ScannerScreen;
