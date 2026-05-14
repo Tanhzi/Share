@@ -50,7 +50,7 @@ const getScanNetworkErrorMessage = () => {
 
 const ScannerScreen = ({ navigation }: any) => {
   const { token } = useAuth();
-  const { isConnected } = useNetworkStatus();
+  const { isConnected, executeWithRetry } = useNetworkStatus();
 
   // Animation
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -144,56 +144,59 @@ const ScannerScreen = ({ navigation }: any) => {
     });
   }, []);
 
-  // --- 1. GỌI API SCAN ---
-  const handleScan = useCallback(async () => {
-    if (!isConnected) {
-      Alert.alert(
-        'No Internet Connection',
-        'Please check your network connection and try again.'
-      );
+// --- 1. GỌI API SCAN ---
+const handleScan = useCallback(async () => {
+  if (!isConnected) {
+    Alert.alert(
+      'No Internet Connection',
+      'Please check your network connection and try again.'
+    );
+    return;
+  }
+
+  setIsLoading(true);
+  try {
+    const coords = await getCurrentLocation();
+    if (!coords) {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const coords = await getCurrentLocation();
-      if (!coords) {
-        return;
-      }
+    const scanEndpoint = token ? '/scan' : '/scan-public';
+    const scanUrl = `${DOC_URL}${scanEndpoint}?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`;
 
-      const scanEndpoint = token ? '/scan' : '/scan-public';
-      const scanUrl = `${DOC_URL}${scanEndpoint}?latitude=${coords.latitude}&longitude=${coords.longitude}&radius=50`;
+    const res = await executeWithRetry(async () => {
+      return await apiGet(scanUrl, token ?? undefined) as any;
+    });
+    
+    const data = res as { documents?: any[] };
 
-      const res = await apiGet(scanUrl, token ?? undefined) as any;
-      const data = res as { documents?: any[] };
-
-      if (Array.isArray(data?.documents)) {
-        const mappedDocs = data.documents.map((doc: any) => {
-          const distanceVal = Math.floor(Math.random() * 30) + 1;
-          return {
-            id: doc.id,
-            name: doc.name,
-            type: getFileType(doc.file_type),
-            ownerDevice: doc.is_anonymous ? 'Anonymous' : 'Unknown Device',
-            distance: `${distanceVal}m`,
-            size: formatBytes(doc.file_size),
-            isProtected: doc.is_protected,
-            url: doc.file_url,
-          };
-        });
-        setDocuments(mappedDocs);
-      } else {
-        console.error('Scan failed:', data);
-        Alert.alert('Error', 'Failed to scan documents.');
-      }
-    } catch (error) {
-      console.error('Scan failed:', error);
-      Alert.alert('Error', getScanNetworkErrorMessage());
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
+    if (Array.isArray(data?.documents)) {
+      const mappedDocs = data.documents.map((doc: any) => {
+        const distanceVal = Math.floor(Math.random() * 30) + 1;
+        return {
+          id: doc.id,
+          name: doc.name,
+          type: getFileType(doc.file_type),
+          ownerDevice: doc.is_anonymous ? 'Anonymous' : 'Unknown Device',
+          distance: `${distanceVal}m`,
+          size: formatBytes(doc.file_size),
+          isProtected: doc.is_protected,
+          url: doc.file_url,
+        };
+      });
+      setDocuments(mappedDocs);
+    } else {
+      console.error('Scan failed:', data);
+      Alert.alert('Error', 'Failed to scan documents.');
     }
-  }, [token, isConnected, getCurrentLocation]);
+  } catch (error) {
+    console.error('Scan failed:', error);
+    Alert.alert('Error', getScanNetworkErrorMessage());
+  } finally {
+    setIsLoading(false);
+    setRefreshing(false);
+  }
+}, [token, isConnected, getCurrentLocation, executeWithRetry]);
 
   // --- 2. TẢI FILE ---
   const downloadFile = async (url: string, fileName: string) => {
@@ -261,57 +264,60 @@ const ScannerScreen = ({ navigation }: any) => {
     }
   };
 
-  // --- 4. XÁC THỰC MẬT KHẨU & TẢI FILE ---
-  const checkPasswordAndDownload = async (
-    docId: string,
-    docName: string,
-    password: string
-  ) => {
-    setIsVerifying(true);
-    try {
-      const verifyEndpoint = token
-        ? '/verify-password'
-        : '/verify-password-public';
+// --- 4. XÁC THỰC MẬT KHẨU & TẢI FILE ---
+const checkPasswordAndDownload = async (
+  docId: string,
+  docName: string,
+  password: string
+) => {
+  setIsVerifying(true);
+  try {
+    const verifyEndpoint = token
+      ? '/verify-password'
+      : '/verify-password-public';
 
-      const data = await apiPost(
+    const data = await executeWithRetry(async () => {
+      return await apiPost(
         `${DOC_URL}${verifyEndpoint}`,
         { documentId: docId, password },
         token ?? undefined
       ) as { downloadUrl?: string; message?: string };
+    });
 
-      if (data && data.downloadUrl) {
-        setModalVisible(false);
-        if (selectedDoc && isLinkDocument(selectedDoc)) {
-          const normalizedUrl = normalizeUrl(data.downloadUrl);
-          if (normalizedUrl) {
-            await Linking.openURL(normalizedUrl);
-          }
-        } else {
-          await downloadFile(data.downloadUrl, docName);
+    if (data && data.downloadUrl) {
+      setModalVisible(false);
+      if (selectedDoc && isLinkDocument(selectedDoc)) {
+        const normalizedUrl = normalizeUrl(data.downloadUrl);
+        if (normalizedUrl) {
+          await Linking.openURL(normalizedUrl);
         }
       } else {
-        Alert.alert('Error', data?.message || 'Server error');
+        await downloadFile(data.downloadUrl, docName);
       }
-    } catch (error: any) {
-      Alert.alert(
-        'Error',
-        error.message === 'Invalid password'
-          ? 'Invalid password'
-          : error.message === 'Document not found'
-          ? 'Document not found'
-          : 'Network error verifying password.'
-      );
-    } finally {
-      setIsVerifying(false);
+    } else {
+      Alert.alert('Error', data?.message || 'Server error');
     }
-  };
+  } catch (error: any) {
+    const errorMessage = error.message?.toLowerCase() || '';
+    Alert.alert(
+      'Error',
+      errorMessage.includes('invalid password')
+        ? 'Invalid password'
+        : errorMessage.includes('document not found')
+        ? 'Document not found'
+        : 'Network error verifying password.'
+    );
+  } finally {
+    setIsVerifying(false);
+  }
+};
 
-  // --- EFFECTS ---
-  useFocusEffect(
-    useCallback(() => {
-      handleScan();
-    }, [handleScan])
-  );
+// --- EFFECTS ---
+useFocusEffect(
+  useCallback(() => {
+    handleScan();
+  }, [handleScan, executeWithRetry])
+);
 
   const onRefresh = () => {
     setRefreshing(true);

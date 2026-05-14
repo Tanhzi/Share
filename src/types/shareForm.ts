@@ -60,7 +60,12 @@ export function shareFormReducer(
 ): ShareFormData {
   switch (action.type) {
     case 'SET_CATEGORY':
-      return { ...state, category: action.payload };
+      return {
+        ...state,
+        category: action.payload,
+        selectedFile:
+          action.payload === state.category ? state.selectedFile : null,
+      };
     case 'SET_LINK_INPUT':
       return { ...state, linkContent: action.payload };
     case 'SET_TEXT_INPUT':

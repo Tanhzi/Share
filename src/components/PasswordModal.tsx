@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
@@ -21,6 +22,9 @@ interface PasswordModalProps {
   isLink?: boolean;
 }
 
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_TIME_MS = 3600000; // 1 hour
+
 export const PasswordModal: React.FC<PasswordModalProps> = ({
   visible,
   onClose,
@@ -30,24 +34,68 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
   isLink = false,
 }) => {
   const [password, setPassword] = useState('');
+  const [attempts, setAttempts] = useState(0);
+  const [lastAttemptTime, setLastAttemptTime] = useState<number>(0);
+  const [isLocked, setIsLocked] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      const now = Date.now();
+      if (lastAttemptTime && (now - lastAttemptTime) > LOCKOUT_TIME_MS) {
+        setAttempts(0);
+        setIsLocked(false);
+      }
+    }
+  }, [visible, lastAttemptTime]);
 
   const handleVerify = () => {
+    if (isLocked) {
+      const remainingTime = Math.ceil((LOCKOUT_TIME_MS - (Date.now() - lastAttemptTime)) / 60000);
+      Alert.alert(
+        'Too Many Attempts',
+        `Please try again in ${remainingTime} minute(s).`
+      );
+      return;
+    }
+
+    if (!password.trim()) {
+      Alert.alert('Error', 'Please enter a password');
+      return;
+    }
+
     onVerify(password);
+    setAttempts(prev => prev + 1);
+    setLastAttemptTime(Date.now());
+  };
+
+  const handleCancel = () => {
+    setPassword('');
+    onClose();
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade">
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalIconCircle}>
-            <Icon name="lock" size={32} color="#f59e0b" />
-          </View>
-          <Text style={styles.modalTitle}>Password Required</Text>
-          <Text style={styles.modalSubtitle}>
-            {docName ? `"${docName}" is ` : 'This document '}is protected.
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.modalOverlay}>
+    <View style={styles.modalContent}>
+      <View style={styles.modalIconCircle}>
+      <Icon name="lock" size={32} color="#f59e0b" />
+      </View>
+      <Text style={styles.modalTitle}>Password Required</Text>
+      <Text style={styles.modalSubtitle}>
+        {docName ? `"${docName}" is ` : 'This document '}is protected.
+      </Text>
+      
+      {isLocked ? (
+        <View style={styles.lockedContainer}>
+          <Icon name="lock-outline" size={48} color="#ef4444" />
+          <Text style={styles.lockedText}>
+            Too many failed attempts. Please try again later.
           </Text>
+        </View>
+      ) : (
+        <>
           <TextInput
             style={styles.passwordInput}
             placeholder="Enter Password"
@@ -55,29 +103,38 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
             autoFocus
             value={password}
             onChangeText={setPassword}
+            editable={!isLoading}
           />
-          <View style={styles.modalButtons}>
-            <TouchableOpacity
-              style={[styles.modalBtn, styles.cancelBtn]}
-              onPress={onClose}
-              disabled={isLoading}>
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalBtn, styles.confirmBtn]}
-              onPress={handleVerify}
-              disabled={isLoading}>
-              {isLoading ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.confirmBtnText}>
-                  {isLink ? 'Unlock & Open Link' : 'Unlock & Download'}
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+          {attempts > 0 && (
+            <Text style={styles.attemptText}>
+              {attempts} attempt{attempts !== 1 ? 's' : ''} (max: {MAX_ATTEMPTS})
+            </Text>
+          )}
+        </>
+      )}
+      
+      <View style={styles.modalButtons}>
+        <TouchableOpacity
+          style={[styles.modalBtn, styles.cancelBtn]}
+          onPress={handleCancel}
+          disabled={isLoading || isLocked}>
+          <Text style={styles.cancelBtnText}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.modalBtn, styles.confirmBtn]}
+          onPress={handleVerify}
+          disabled={isLoading || isLocked}>
+          {isLoading ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <Text style={styles.confirmBtnText}>
+              {isLink ? 'Unlock & Open Link' : 'Unlock & Download'}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+    </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -119,6 +176,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 24,
   },
+  lockedContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  lockedText: {
+    fontSize: 14,
+    color: '#ef4444',
+    textAlign: 'center',
+    marginTop: 12,
+  },
   passwordInput: {
     width: '100%',
     backgroundColor: '#f8fafc',
@@ -127,8 +194,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     fontSize: 16,
-    marginBottom: 24,
+    marginBottom: 12,
     textAlign: 'center',
+  },
+  attemptText: {
+    fontSize: 12,
+    color: '#f59e0b',
+    marginBottom: 12,
   },
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
   modalBtn: {

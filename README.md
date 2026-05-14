@@ -50,7 +50,7 @@ npm run lint
 ```
 src/
   components/    # UI components tái sử dụng
-  context/       # Auth context và shared state
+  context/       # Auth context và shared state 
   navigation/     # Cấu hình điều hướng (stack/tab)
   screens/       # Các màn hình chính
 android/          # Native Android project

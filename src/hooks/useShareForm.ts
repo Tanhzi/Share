@@ -24,16 +24,21 @@ const initialState: ShareFormData = initialShareFormData;
 
 // Validation functions
 const validateLink = (link: string): boolean => {
-  if (!link.trim()) return false;
-  try {
-    return Boolean(new URL(link));
-  } catch {
-    return false;
-  }
+if (!link.trim()) return false;
+try {
+return Boolean(new URL(link));
+} catch {
+return false;
+}
 };
 
 const validatePassword = (pwd: string): boolean => {
-  return pwd.length >= 4;
+return pwd.length >= 4;
+};
+
+// Helper to determine if sharing should be public (unauthenticated users)
+const shouldSharePublicly = (userToken: string | null): boolean => {
+return !userToken;
 };
 
 const LARGE_FILE_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -51,26 +56,28 @@ class UploadError extends Error {
 }
 
 interface UseShareFormReturn {
-  // State
-  formData: ShareFormData;
-  isLoading: boolean;
-  uploadProgress: number;
-  errors: Record<string, string>;
+// State
+formData: ShareFormData;
+isLoading: boolean;
+uploadProgress: number;
+errors: Record<string, string>;
 
-  // Actions
-  dispatch: React.Dispatch<ShareFormAction>;
-  setCategory: (category: ShareCategory) => void;
-  setLinkInput: (value: string) => void;
-  setTextInput: (value: string) => void;
-  setSelectedFile: (file: ShareFile | null) => void;
-  setExpiration: (value: string) => void;
-  setIsAnonymous: (value: boolean) => void;
-  setIsPasswordProtected: (value: boolean) => void;
-  setPassword: (value: string) => void;
-  setIsPublicSharing: (value: boolean) => void;
+// Actions
+dispatch: React.Dispatch<ShareFormAction>;
+setCategory: (category: ShareCategory) => void;
+setLinkInput: (value: string) => void;
+setTextInput: (value: string) => void;
+setSelectedFile: (file: ShareFile | null) => void;
+setExpiration: (value: string) => void;
+setIsAnonymous: (value: boolean) => void;
+setIsPasswordProtected: (value: boolean) => void;
+setPassword: (value: string) => void;
 
-  // File operations
-  handleSelectMedia: (useCamera: boolean) => Promise<void>;
+// File operations
+  handleSelectMedia: (
+    useCamera: boolean,
+    categoryOverride?: Extract<ShareCategory, 'Photos' | 'Videos'>
+  ) => Promise<void>;
   handleSelectDocument: () => Promise<void>;
 
   // Share operation
@@ -93,61 +100,66 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
   const validate = useCallback((): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (formData.category === 'Links' && !validateLink(formData.linkContent)) {
-      newErrors.linkInput = 'Please enter a valid link';
-    }
+if (formData.category === 'Links' && !validateLink(formData.linkContent)) {
+newErrors.linkInput = 'Please enter a valid link';
+}
 
-    if (formData.category === 'Text' && !formData.textContent.trim()) {
-      newErrors.textInput = 'Please enter some text';
-    }
+if (formData.category === 'Text' && !formData.textContent.trim()) {
+newErrors.textInput = 'Please enter content to share';
+}
 
-    if (
-      ['Photos', 'Videos', 'Files'].includes(formData.category) &&
-      !formData.selectedFile
-    ) {
-      newErrors.file = 'Please select a file';
-    }
+if (
+['Photos', 'Videos', 'Files'].includes(formData.category) &&
+!formData.selectedFile
+) {
+newErrors.file = 'Please select content before sharing';
+}
 
-    if (formData.isPasswordProtected && !validatePassword(formData.password)) {
-      newErrors.password = 'Password must be at least 4 characters';
-    }
+if (formData.isPasswordProtected && !validatePassword(formData.password)) {
+newErrors.password = 'Password must be at least 4 characters';
+}
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }, [formData]);
 
   // Permission handler
-  const requestLocationPermission = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS === 'ios') {
-      const auth = await Geolocation.requestAuthorization('whenInUse');
-      return auth === 'granted';
-    }
+const requestLocationPermission = useCallback(async (): Promise<boolean> => {
+if (Platform.OS === 'ios') {
+const auth = await Geolocation.requestAuthorization('whenInUse');
+return auth === 'granted';
+}
 
-    if (Platform.OS === 'android') {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        {
-          title: 'Location Permission',
-          message:
-            'This app needs access to your location to share files nearby.',
-          buttonNeutral: 'Ask Me Later',
-          buttonNegative: 'Cancel',
-          buttonPositive: 'OK',
-        }
-      );
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
-    }
+if (Platform.OS === 'android') {
+const granted = await PermissionsAndroid.request(
+PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+{
+title: 'Location Access Required',
+message:
+'App needs location to share content with people nearby.',
+buttonNeutral: 'Later',
+buttonNegative: 'Cancel',
+buttonPositive: 'OK',
+}
+);
+return granted === PermissionsAndroid.RESULTS.GRANTED;
+}
 
-    return false;
-  }, []);
+return false;
+}, []);
 
   // Media picker
   const handleSelectMedia = useCallback(
-    async (useCamera: boolean) => {
+    async (
+      useCamera: boolean,
+      categoryOverride?: Extract<ShareCategory, 'Photos' | 'Videos'>
+    ) => {
       try {
+        const mediaCategory = categoryOverride || formData.category;
+
         if (useCamera) {
           const options: any = {
-            mediaType: formData.category === 'Videos' ? 'video' : 'photo',
+            mediaType: mediaCategory === 'Videos' ? 'video' : 'photo',
             quality: 0.8,
             includeBase64: false,
             saveToPhotos: true,
@@ -157,18 +169,18 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
           const result = await launchCamera(options);
 
           if (result.didCancel) return;
-          if (result.errorCode) {
-            Alert.alert(
-              'Error',
-              result.errorMessage || 'Failed to capture media'
-            );
-            return;
-          }
+if (result.errorCode) {
+Alert.alert(
+'Cannot open camera',
+result.errorMessage || 'Please try again'
+);
+return;
+}
 
-          if (!result.assets?.[0]) {
-            Alert.alert('Error', 'No media returned');
-            return;
-          }
+if (!result.assets?.[0]) {
+Alert.alert('No content', 'Camera did not return photo/video');
+return;
+}
 
           const asset = result.assets[0];
           let uri = asset.uri || '';
@@ -178,21 +190,20 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
 
           const fileName =
             asset.fileName ||
-            `capture-${Date.now()}.${
-              formData.category === 'Videos' ? 'mp4' : 'jpg'
-            }`;
+            `capture-${Date.now()}.${mediaCategory === 'Videos' ? 'mp4' : 'jpg'}`;
           const fileType =
             asset.type ||
-            (formData.category === 'Videos' ? 'video/mp4' : 'image/jpeg');
+            (mediaCategory === 'Videos' ? 'video/mp4' : 'image/jpeg');
           const fileSize = asset.fileSize || 0;
 
+          dispatch({ type: 'SET_CATEGORY', payload: mediaCategory });
           dispatch({
             type: 'SET_SELECTED_FILE',
             payload: { uri, type: fileType, name: fileName, size: fileSize },
           });
         } else {
           const mimeTypes =
-            formData.category === 'Videos'
+            mediaCategory === 'Videos'
               ? [DocumentPicker.types.video]
               : [DocumentPicker.types.images];
 
@@ -203,6 +214,7 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
 
           if (res && res.length > 0) {
             const file = res[0];
+            dispatch({ type: 'SET_CATEGORY', payload: mediaCategory });
             dispatch({
               type: 'SET_SELECTED_FILE',
               payload: {
@@ -214,63 +226,64 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
             });
           }
         }
-      } catch (err: any) {
-        if (err?.message !== 'User canceled document picker') {
-          Alert.alert('Error', 'Unknown error picking file');
-        }
-      }
-    },
-    [formData.category]
-  );
+} catch (err: any) {
+if (err?.message !== 'User canceled document picker') {
+Alert.alert('Cannot select content', 'Please try again');
+}
+}
+},
+[formData.category]
+);
 
-  // Document picker
-  const handleSelectDocument = useCallback(async () => {
-    try {
-      const res = await DocumentPicker.pick({
-        allowMultiSelection: false,
-        type: [DocumentPicker.types.allFiles],
-      });
+// Document picker
+const handleSelectDocument = useCallback(async () => {
+try {
+const res = await DocumentPicker.pick({
+allowMultiSelection: false,
+type: [DocumentPicker.types.allFiles],
+});
 
-      if (res && res.length > 0) {
-        const file = res[0];
-        dispatch({
-          type: 'SET_SELECTED_FILE',
-          payload: {
-            uri: file.uri || '',
-            name: file.name || '',
-            type: file.type || '',
-            size: file.size || 0,
-          },
-        });
-      }
-    } catch (err: any) {
-      if (err?.message !== 'User canceled document picker') {
-        Alert.alert('Error', 'Unknown error picking file');
-      }
-    }
-  }, []);
+if (res && res.length > 0) {
+const file = res[0];
+dispatch({ type: 'SET_CATEGORY', payload: 'Files' });
+dispatch({
+type: 'SET_SELECTED_FILE',
+payload: {
+uri: file.uri || '',
+name: file.name || '',
+type: file.type || '',
+size: file.size || 0,
+},
+});
+}
+} catch (err: any) {
+if (err?.message !== 'User canceled document picker') {
+Alert.alert('Cannot select file', 'Please try again');
+}
+}
+}, []);
 
-  // Share handler
-  const handleShare = useCallback(async () => {
-    if (!validate()) {
-      return;
-    }
+// Share handler
+const handleShare = useCallback(async () => {
+if (!validate()) {
+return;
+}
 
-    setIsLoading(true);
-    setUploadProgress(0);
+setIsLoading(true);
+setUploadProgress(0);
 
-    try {
-      const hasPermission = await requestLocationPermission();
-      if (!hasPermission) {
-        Alert.alert(
-          'Permission Denied',
-          'Location is required to share files nearby.'
-        );
-        setIsLoading(false);
-        return;
-      }
+try {
+const hasPermission = await requestLocationPermission();
+if (!hasPermission) {
+Alert.alert(
+'Location access required',
+'You need to grant location access to share content with people nearby.'
+);
+setIsLoading(false);
+return;
+}
 
-      // Get location
+// Get location
       const position = await new Promise<Geolocation.GeoPosition>(
         (resolve, reject) => {
           Geolocation.getCurrentPosition(resolve, reject, {
@@ -319,37 +332,37 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
         ]);
       }
 
-      Alert.alert('Success', 'Sharing started successfully!', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
-    } catch (error: any) {
-      console.error('[Share Error]', {
-        message: error?.message,
-        status: error?.status,
-        responseText: error?.responseText,
-        raw: error,
-      });
-      Alert.alert('Error', error.message || 'Could not share document');
+Alert.alert('Sharing started', 'People nearby can scan your content.', [
+{ text: 'OK', onPress: () => navigation.goBack() },
+]);
+} catch (error: any) {
+console.error('[Share Error]', {
+message: error?.message,
+status: error?.status,
+responseText: error?.responseText,
+raw: error,
+});
+Alert.alert('Cannot share', error.message || 'Please try again');
     } finally {
       setIsLoading(false);
       setUploadProgress(0);
     }
 
-    async function uploadWithFetch(uploadFormData: FormData) {
-      const uploadUrl = `${DOCUMENT_URL}/share${
-        formData.isPublicSharing ? '-public' : ''
-      }`;
+async function uploadWithFetch(uploadFormData: FormData) {
+// Public sharing is automatically enabled for unauthenticated users
+const isPublic = shouldSharePublicly(token);
+const uploadUrl = `${DOCUMENT_URL}/share${isPublic ? '-public' : ''}`;
 
-      const headers: Record<string, string> = {};
-      if (!formData.isPublicSharing && token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
+const headers: Record<string, string> = {};
+if (!isPublic && token) {
+headers.Authorization = `Bearer ${token}`;
+}
 
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers,
-        body: uploadFormData as any,
-      });
+const response = await fetch(uploadUrl, {
+method: 'POST',
+headers,
+body: uploadFormData as any,
+});
 
       const responseText = await response.text().catch(() => '');
       const data = parseResponseJson(responseText);
@@ -359,18 +372,18 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
       }
     }
 
-    async function uploadFileWithBlobUtil(parts: any[]) {
-      const uploadUrl = `${DOCUMENT_URL}/share${
-        formData.isPublicSharing ? '-public' : ''
-      }`;
+async function uploadFileWithBlobUtil(parts: any[]) {
+// Public sharing is automatically enabled for unauthenticated users
+const isPublic = shouldSharePublicly(token);
+const uploadUrl = `${DOCUMENT_URL}/share${isPublic ? '-public' : ''}`;
 
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-        'Content-Type': 'multipart/form-data',
-      };
-      if (!formData.isPublicSharing && token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
+const headers: Record<string, string> = {
+Accept: 'application/json',
+'Content-Type': 'multipart/form-data',
+};
+if (!isPublic && token) {
+headers.Authorization = `Bearer ${token}`;
+}
 
       const task = ReactNativeBlobUtil.config({
         timeout: LARGE_FILE_UPLOAD_TIMEOUT_MS,
@@ -439,28 +452,28 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
       return new UploadError(message, status, responseText);
     }
 
-    function getDefaultUploadErrorMessage(
-      status: number,
-      responseText: string
-    ): string {
-      if (status === 413) {
-        return 'File is too large for the server upload limit. Please increase the backend/proxy file size limit.';
-      }
+function getDefaultUploadErrorMessage(
+status: number,
+responseText: string
+): string {
+if (status === 413) {
+return 'File is too large for server upload limit.';
+}
 
-      if (status === 408 || status === 504) {
-        return 'Upload finished, but the server took too long to process the file. Please try again or increase the backend timeout.';
-      }
+if (status === 408 || status === 504) {
+return 'Upload completed but server took too long. Please try again.';
+}
 
-      if (status >= 500) {
-        return 'Upload finished, but the server failed while processing the file. Check the backend logs for the real error.';
-      }
+if (status >= 500) {
+return 'Server encountered an error. Please try again later.';
+}
 
-      if (responseText) {
-        return `Upload failed with status ${status}`;
-      }
+if (responseText) {
+return `Upload failed with status ${status}`;
+}
 
-      return `Upload failed with status ${status || 'unknown'}`;
-    }
+return `Upload failed with status ${status || 'unknown'}`;
+}
   }, [formData, token, validate, requestLocationPermission, navigation]);
 
   // Reset form
@@ -499,33 +512,28 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
     dispatch({ type: 'SET_IS_PASSWORD_PROTECTED', payload: value });
   }, []);
 
-  const setPassword = useCallback((value: string) => {
-    dispatch({ type: 'SET_PASSWORD', payload: value });
-  }, []);
+const setPassword = useCallback((value: string) => {
+dispatch({ type: 'SET_PASSWORD', payload: value });
+}, []);
 
-  const setIsPublicSharing = useCallback((value: boolean) => {
-    dispatch({ type: 'SET_IS_PUBLIC_SHARING', payload: value });
-  }, []);
-
-  return {
-    formData,
-    isLoading,
-    uploadProgress,
-    errors,
-    dispatch,
-    setCategory,
-    setLinkInput,
-    setTextInput,
-    setSelectedFile,
-    setExpiration,
-    setIsAnonymous,
-    setIsPasswordProtected,
-    setPassword,
-    setIsPublicSharing,
-    handleSelectMedia,
-    handleSelectDocument,
-    handleShare,
-    resetForm,
-    validate,
-  };
+return {
+formData,
+isLoading,
+uploadProgress,
+errors,
+dispatch,
+setCategory,
+setLinkInput,
+setTextInput,
+setSelectedFile,
+setExpiration,
+setIsAnonymous,
+setIsPasswordProtected,
+setPassword,
+handleSelectMedia,
+handleSelectDocument,
+handleShare,
+resetForm,
+validate,
+};
 };

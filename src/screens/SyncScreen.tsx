@@ -12,6 +12,7 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  FlatList,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -19,6 +20,8 @@ import { SYNC_URL, DOCUMENT_URL } from '../config/env';
 import { useFocusEffect } from '@react-navigation/native';
 import GuestPlaceholder from '../components/GuestPlaceholder';
 import { apiGet, apiPost, apiPut } from '../api/client';
+import DocumentPreview from '../components/DocumentPreview';
+import { useFileDownload } from '../hooks/useFileDownload';
 
 const COLORS = {
   primary: '#2563EB',
@@ -43,6 +46,17 @@ const formatRelativeTime = (dateString: string) => {
   if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
   return `${Math.floor(diff / 86400)} days ago`;
 };
+
+type SyncStatus = 'idle' | 'connecting' | 'syncing' | 'paused' | 'error' | 'completed';
+
+interface SyncHistory {
+  id: string;
+  type: 'incoming' | 'outgoing';
+  action: string;
+  timestamp: string;
+  status: 'success' | 'failed' | 'pending';
+  partner?: string;
+}
 
 type SyncStatusResponse = {
   isLinked: boolean;
@@ -72,6 +86,11 @@ const SyncScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Sync State Machine
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncHistory, setSyncHistory] = useState<SyncHistory[]>([]);
+
   // Data State
   const [isLinked, setIsLinked] = useState(false);
   const [partner, setPartner] = useState<any>(null);
@@ -96,6 +115,36 @@ const SyncScreen = () => {
   const [emailToLink, setEmailToLink] = useState('');
   const [isAutoDownload, setIsAutoDownload] = useState(true);
   const [isAutoView, setIsAutoView] = useState(false);
+
+  // Use file download hook
+  const { downloadFile, getProgress } = useFileDownload({
+    onDownloadStart: (docId) => {
+      console.log('Download started:', docId);
+      addToSyncHistory(docId, 'Auto-download', 'pending');
+    },
+    onDownloadComplete: (docId, path) => {
+      console.log('Download completed:', docId, path);
+      addToSyncHistory(docId, 'Auto-download', 'success');
+    },
+    onDownloadError: (docId, error) => {
+      console.error('Download error:', docId, error);
+      addToSyncHistory(docId, 'Auto-download', 'failed');
+    },
+  });
+
+  const addToSyncHistory = (docId: string, action: string, status: 'success' | 'failed' | 'pending') => {
+    setSyncHistory(prev => [
+      {
+        id: Date.now().toString(),
+        type: 'incoming',
+        action,
+        timestamp: new Date().toISOString(),
+        status,
+        partner: partner?.email || 'Unknown',
+      },
+      ...prev.slice(0, 9), // Keep last 10 items
+    ]);
+  };
 
   // --- FETCH DATA ---
   const fetchData = useCallback(async () => {
@@ -158,80 +207,82 @@ const SyncScreen = () => {
     [authToken, signedUrls]
   );
 
-  // Hàm tải file tự động
-  const autoDownloadFile = useCallback(
-    async (doc: any) => {
-      if (downloadedFiles[doc.id] || downloadingFiles[doc.id]) {
-        return; // Already downloaded or downloading
-      }
-
-      // Only auto-download images and videos when auto-download is enabled
-      if (!isAutoDownload || (doc.type !== 'image' && doc.type !== 'video')) {
-        return;
-      }
-
-      setDownloadingFiles(prev => ({ ...prev, [doc.id]: true }));
-
-      try {
-        const signedUrl = await fetchSignedUrl(doc.id);
-        if (!signedUrl) {
-          throw new Error('Failed to get download URL');
-        }
-
-        // For React Native, we'll use FileSystem to download files
-        // You may need to install expo-file-system
-        console.log('Auto-downloading file:', doc.name, 'URL:', signedUrl);
-
-        // Simulate download completion
-        // In a real implementation, you would use:
-        // import * as FileSystem from 'expo-file-system';
-        // await FileSystem.downloadAsync(signedUrl, FileSystem.documentDirectory + doc.name);
-
-        setTimeout(() => {
-          setDownloadingFiles(prev => ({ ...prev, [doc.id]: false }));
-          setDownloadedFiles(prev => ({ ...prev, [doc.id]: true }));
-        }, 2000); // Simulate 2 second download
-      } catch {
-        setDownloadingFiles(prev => ({ ...prev, [doc.id]: false }));
-      }
-    },
-    [downloadedFiles, downloadingFiles, isAutoDownload, fetchSignedUrl]
-  );
-
-  const fetchPartnerDocuments = useCallback(async () => {
-    if (!isLinked || !authToken) return;
-    setIsLoadingDocuments(true);
-    try {
-      const res = await fetch(`${SYNC_URL}/documents`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (!res.ok) {
-        throw new Error(`Fetch partner documents failed: ${res.status}`);
-      }
-
-      const data = (await res.json()) as PartnerDocumentsResponse;
-      const documents = data.documents || [];
-      setPartnerDocuments(documents);
-      setHasDocuments(Boolean(data.hasDocuments));
-
-      // Pre-fetch signed URLs for images and videos
-      const mediaDocs = documents.filter(
-        (doc: any) => doc.type === 'image' || doc.type === 'video'
-      );
-      for (const doc of mediaDocs) {
-        await fetchSignedUrl(doc.id);
-
-        // Auto-download if enabled
-        if (isAutoDownload) {
-          await autoDownloadFile(doc);
-        }
-      }
-    } catch (error) {
-      console.error('Fetch partner documents error:', error);
-    } finally {
-      setIsLoadingDocuments(false);
+// Hàm tải file tự động
+const autoDownloadFile = useCallback(
+  async (doc: any) => {
+    if (downloadedFiles[doc.id] || downloadingFiles[doc.id]) {
+      return; // Already downloaded or downloading
     }
-  }, [authToken, isLinked, isAutoDownload, fetchSignedUrl, autoDownloadFile]);
+
+    // Only auto-download images and videos when auto-download is enabled
+    if (!isAutoDownload || (doc.type !== 'image' && doc.type !== 'video')) {
+      return;
+    }
+
+    try {
+      const signedUrl = await fetchSignedUrl(doc.id);
+      if (!signedUrl) {
+        throw new Error('Failed to get download URL');
+      }
+
+      // Use real download with progress tracking
+      await downloadFile(doc.id, doc.name, doc.type, signedUrl);
+      
+      setDownloadedFiles(prev => ({ ...prev, [doc.id]: true }));
+    } catch (error) {
+      console.error('Auto-download failed:', error);
+      addToSyncHistory(doc.id, 'Auto-download', 'failed');
+    }
+  },
+  [downloadedFiles, downloadingFiles, isAutoDownload, fetchSignedUrl, downloadFile]
+);
+
+const fetchPartnerDocuments = useCallback(async () => {
+  if (!isLinked || !authToken) return;
+  
+  setSyncStatus('connecting');
+  setIsLoadingDocuments(true);
+  
+  try {
+    const res = await fetch(`${SYNC_URL}/documents`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`Fetch partner documents failed: ${res.status}`);
+    }
+
+    const data = (await res.json()) as PartnerDocumentsResponse;
+    const documents = data.documents || [];
+    setPartnerDocuments(documents);
+    setHasDocuments(Boolean(data.hasDocuments));
+
+    // Pre-fetch signed URLs for images and videos
+    const mediaDocs = documents.filter(
+      (doc: any) => doc.type === 'image' || doc.type === 'video'
+    );
+    
+    setSyncStatus('syncing');
+    setSyncProgress(0);
+    
+    for (const doc of mediaDocs) {
+      await fetchSignedUrl(doc.id);
+
+      // Auto-download if enabled
+      if (isAutoDownload) {
+        await autoDownloadFile(doc);
+      }
+      setSyncProgress(prev => prev + (100 / mediaDocs.length || 1));
+    }
+    
+    setSyncStatus('completed');
+  } catch (error) {
+    console.error('Fetch partner documents error:', error);
+    setSyncStatus('error');
+    addToSyncHistory('sync', 'Fetch documents', 'failed');
+  } finally {
+    setIsLoadingDocuments(false);
+  }
+}, [authToken, isLinked, isAutoDownload, fetchSignedUrl, autoDownloadFile]);
 
   useFocusEffect(
     useCallback(() => {
