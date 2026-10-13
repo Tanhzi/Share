@@ -1,6 +1,6 @@
 export function formatBytes(bytes: number, decimals: number = 2): string {
   // Kiểm tra kiểu dữ liệu đầu vào
-  if (typeof bytes !== 'number' || isNaN(bytes)) {
+  if (typeof bytes !== 'number' || isNaN(bytes) || bytes < 0) {
     return '0 Bytes';
   }
   

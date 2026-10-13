@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -12,6 +12,27 @@ import ShareFormScreen from '../screens/ShareFormScreen';
 import ChangePasswordScreen from '../screens/ChangePasswordScreen';
 
 import { useAuth } from '../context/AuthContext';
+
+const isWeb = Platform.OS === 'web';
+
+// Web linking configuration
+const linking = isWeb ? {
+  enabled: true,
+  prefixes: [
+    'http://localhost:3000',
+    'https://sharedocu-web.vercel.app',
+  ],
+  config: {
+    screens: {
+      MainApp: '',
+      Login: 'login',
+      Register: 'register',
+      ForgotPassword: 'forgot-password',
+      ShareForm: 'share',
+      ChangePassword: 'change-password',
+    },
+  },
+} : undefined;
 
 const Stack = createNativeStackNavigator();
 
@@ -33,13 +54,16 @@ const AppNavigator = () => {
     );
   }
 
-  return (
-    <NavigationContainer>
-      <Stack.Navigator
-        // 2. SỬA LẠI LOGIC: Luôn luôn bắt đầu từ MainApp (chứa Scanner)
-        // Bất kể đã đăng nhập hay chưa
-        initialRouteName="MainApp"
-        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+return (
+<NavigationContainer linking={linking} fallback={<View />}>
+<Stack.Navigator
+// 2. SỬA LẠI LOGIC: Luôn luôn bắt đầu từ MainApp (chứa Scanner)
+// Bất kể đã đăng nhập hay chưa
+initialRouteName="MainApp"
+screenOptions={{
+headerShown: false,
+animation: isWeb ? 'none' : 'slide_from_right',
+}}>
         {/* MainApp: Chứa TabBar (Scanner, MyShares, Sync...) */}
         {/* Bên trong TabNavigator, Scanner được đặt là tab đầu tiên nên sẽ hiện ra trước */}
         <Stack.Screen name="MainApp" component={TabNavigator} />

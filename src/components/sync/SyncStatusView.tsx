@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 
 interface SyncStatusViewProps {
   isConnected: boolean;
@@ -8,9 +8,9 @@ interface SyncStatusViewProps {
 }
 
 const SyncStatusView = ({
-  isConnected,
-  onConnect,
-  onDisconnect,
+  isConnected: _isConnected,
+  onConnect: _onConnect,
+  onDisconnect: _onDisconnect,
 }: SyncStatusViewProps) => {
   return (
     <View style={styles.container}>

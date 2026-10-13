@@ -8,12 +8,12 @@ import {
   ScrollView,
   SafeAreaView,
   StatusBar,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
 import { AUTH_URL } from '../config/env';
+import { showAlert } from '../utils/alert';
 
 const COLORS = {
   primary: '#2563EB',
@@ -32,14 +32,12 @@ const LoginScreen = ({ navigation }: any) => {
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please enter email and password');
+      showAlert('Error', 'Please enter email and password');
       return;
     }
 
     setIsLoading(true);
     try {
-      console.log('Connecting to:', `${AUTH_URL}/login`);
-
       const response = await fetch(`${AUTH_URL}/login`, {
         method: 'POST',
         headers: {
@@ -51,26 +49,20 @@ const LoginScreen = ({ navigation }: any) => {
       const data = await response.json();
 
       if (response.ok) {
-        // Đăng nhập thành công
-        console.log('Login Success:', data);
         login(data.token, data.user);
 
-        // Điều hướng
         if (navigation.canGoBack()) {
           navigation.goBack();
         } else {
           navigation.replace('MainApp');
         }
       } else {
-        // Đăng nhập thất bại (sai pass, không tìm thấy user...)
-        Alert.alert('Login Failed', data.message || 'Something went wrong');
+        console.warn('Login Failed:', data.message);
+        showAlert('Login Failed', data.message || 'Something went wrong');
       }
     } catch (error) {
       console.error('Login Error:', error);
-      Alert.alert(
-        'Network Error',
-        'Cannot connect to server. Please check your internet or server URL.'
-      );
+      showAlert('Network Error', 'Cannot connect to server. Please check your internet or server URL.');
     } finally {
       setIsLoading(false);
     }

@@ -2,10 +2,14 @@
 import { Platform } from 'react-native';
 import { API_URL as ENV_API_URL } from '@env';
 
-const DEFAULT_DEV_API_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:5000/api'
-    : 'http://localhost:5000/api';
+// Check if running on web
+const isWeb = Platform.OS === 'web';
+
+const DEFAULT_DEV_API_URL = isWeb
+  ? 'http://localhost:5000/api'
+  : Platform.OS === 'android'
+  ? 'http://10.0.2.2:5000/api'
+  : 'http://localhost:5000/api';
 
 const RAW_API_URL = ENV_API_URL || DEFAULT_DEV_API_URL;
 

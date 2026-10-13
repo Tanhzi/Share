@@ -1,6 +1,7 @@
 import React from 'react';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
-import { PasswordModal } from '../PasswordModal';
+import { Alert } from 'react-native';
+import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { PasswordModal } from '../../src/components/PasswordModal';
 
 describe('PasswordModal', () => {
   const mockOnVerify = jest.fn();
@@ -90,7 +91,7 @@ describe('PasswordModal', () => {
   });
 
   it('disables confirm button when loading', () => {
-    const { getByText } = render(
+    const { getByTestId } = render(
       <PasswordModal
         visible={true}
         onClose={mockOnClose}
@@ -99,12 +100,15 @@ describe('PasswordModal', () => {
       />
     );
 
-    const confirmButton = getByText('Unlock & Download');
-    expect(confirmButton.props.disabled).toBe(true);
+    const confirmButton = getByTestId('confirm-button');
+    expect(confirmButton.props.accessibilityState?.disabled ?? confirmButton.props.disabled).toBe(true);
   });
 
   it('disables confirm button when locked after max attempts', async () => {
-    const { getByText } = render(
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockOnVerify.mockReturnValue(false);
+
+    const { getByText, getByPlaceholderText, getByTestId } = render(
       <PasswordModal
         visible={true}
         onClose={mockOnClose}
@@ -113,15 +117,19 @@ describe('PasswordModal', () => {
       />
     );
 
-    // Simulate 5 failed attempts
+    // Simulate 5 failed attempts (wrong password) — flush async state updates mỗi lần
     for (let i = 0; i < 5; i++) {
-      const confirmButton = getByText('Unlock & Download');
-      fireEvent.press(confirmButton);
+      fireEvent.changeText(getByPlaceholderText('Enter Password'), 'wrong-password');
+      await act(async () => {
+        fireEvent.press(getByTestId('confirm-button'));
+      });
     }
 
     await waitFor(() => {
-      const confirmButton = getByText('Unlock & Download');
-      expect(confirmButton.props.disabled).toBe(true);
+      const confirmButton = getByTestId('confirm-button');
+      expect(confirmButton.props.accessibilityState?.disabled ?? confirmButton.props.disabled).toBe(true);
     });
+    expect(getByText(/Too many failed attempts/)).toBeTruthy();
+    (Alert.alert as jest.Mock).mockRestore();
   });
 });

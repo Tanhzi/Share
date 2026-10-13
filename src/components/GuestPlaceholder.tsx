@@ -1,12 +1,12 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { useNavigation } from '@react-navigation/native';
 
 interface GuestPlaceholderProps {
   title?: string;
   subtitle?: string;
   icon?: string;
+  navigation?: any;
 }
 
 const COLORS = { primary: '#2563EB', slate400: '#94a3b8', text: '#0f172a' };
@@ -15,8 +15,11 @@ const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({
   title = 'Authentication Required',
   subtitle = 'Please sign in to access this feature.',
   icon = 'lock',
+  navigation,
 }) => {
-  const navigation = useNavigation<any>();
+  const handlePress = () => {
+    navigation?.navigate('Login');
+  };
 
   return (
     <View style={styles.container}>
@@ -28,7 +31,7 @@ const GuestPlaceholder: React.FC<GuestPlaceholderProps> = ({
 
       <TouchableOpacity
         style={styles.button}
-        onPress={() => navigation.navigate('Login')}>
+        onPress={handlePress}>
         <Text style={styles.buttonText}>Sign In / Register</Text>
       </TouchableOpacity>
     </View>

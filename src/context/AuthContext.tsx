@@ -4,12 +4,14 @@ import React, {
   useContext,
   ReactNode,
   useEffect,
+  useCallback,
 } from 'react';
 import {
   saveToSecureStorage,
   getFromSecureStorage,
   removeFromSecureStorage,
 } from '../utils/secureStorage';
+import { setUnauthorizedHandler } from '../api/client';
 
 const TOKEN_EXPIRY_KEY = 'tokenExpiry';
 const DEFAULT_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -38,6 +40,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [expiryTime, setExpiryTime] = useState<number | null>(null);
 
   useEffect(() => {
     const loadStorageData = async () => {
@@ -48,17 +51,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
         if (storedToken && storedUser) {
           if (storedExpiry) {
-            const expiryTime = parseInt(storedExpiry, 10);
-            if (Date.now() > expiryTime) {
+            const parsedExpiry = parseInt(storedExpiry, 10);
+            if (Date.now() > parsedExpiry) {
               await removeFromSecureStorage('userToken');
               await removeFromSecureStorage('userInfo');
               await removeFromSecureStorage(TOKEN_EXPIRY_KEY);
               setIsLoading(false);
               return;
             }
+            setExpiryTime(parsedExpiry);
           }
           setToken(storedToken);
-          setUser(JSON.parse(storedUser));
+          try {
+            setUser(JSON.parse(storedUser));
+          } catch (e) {
+            console.error('Failed to parse stored user', e);
+            await removeFromSecureStorage('userToken');
+            await removeFromSecureStorage('userInfo');
+            await removeFromSecureStorage(TOKEN_EXPIRY_KEY);
+            setToken(null);
+          }
         }
       } catch (e) {
         console.error('Failed to load auth data', e);
@@ -80,16 +92,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       await saveToSecureStorage('userToken', newToken);
       await saveToSecureStorage('userInfo', JSON.stringify(newUser));
-      const expiryTime = Date.now() + (expiresInMs || DEFAULT_TOKEN_EXPIRY_MS);
-      await saveToSecureStorage(TOKEN_EXPIRY_KEY, String(expiryTime));
+      const nextExpiry = Date.now() + (expiresInMs || DEFAULT_TOKEN_EXPIRY_MS);
+      setExpiryTime(nextExpiry);
+      await saveToSecureStorage(TOKEN_EXPIRY_KEY, String(nextExpiry));
     } catch (e) {
       console.error('Failed to save auth data', e);
     }
   };
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     setToken(null);
     setUser(null);
+    setExpiryTime(null);
     try {
       await removeFromSecureStorage('userToken');
       await removeFromSecureStorage('userInfo');
@@ -97,7 +111,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } catch (e) {
       console.error('Failed to remove auth data', e);
     }
-  };
+  }, []);
+
+  // Tự đăng xuất khi API trả 401 (token hết hạn / bị thu hồi) (T10)
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      void logout();
+    });
+    return () => {
+      setUnauthorizedHandler(null);
+    };
+  }, [logout]);
 
   const updateUser = async (updatedUser: User) => {
     setUser(updatedUser);
@@ -110,6 +134,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const isTokenExpired = (): boolean => {
     if (!token) return true;
+    if (expiryTime) {
+      return Date.now() > expiryTime;
+    }
     return false;
   };
 

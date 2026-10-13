@@ -19,7 +19,8 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { AUTH_URL } from '../config/env';
 import GuestPlaceholder from '../components/GuestPlaceholder';
 import { CommonActions } from '@react-navigation/native';
-import { launchImageLibrary } from 'react-native-image-picker'; // Thư viện chọn ảnh
+import { launchImageLibrary } from 'react-native-image-picker';
+import { showAlert } from '../utils/alert';
 
 const COLORS = {
   primary: '#2563EB',
@@ -32,7 +33,7 @@ const COLORS = {
 
 const ProfileScreen = ({ navigation }: any) => {
   const { isLoggedIn, logout, user, token, updateUser } = useAuth();
-  const { isConnected, isInternetReachable } = useNetworkStatus();
+  const { isConnected } = useNetworkStatus();
 
   // State quản lý UI
   const [isEditing, setIsEditing] = useState(false);
@@ -56,6 +57,7 @@ const ProfileScreen = ({ navigation }: any) => {
         title="User Profile"
         subtitle="Sign in to view settings."
         icon="account-circle"
+        navigation={navigation}
       />
     );
   }
@@ -74,29 +76,35 @@ const ProfileScreen = ({ navigation }: any) => {
 
   // --- 1. CHỨC NĂNG ĐĂNG XUẤT ---
   const handleLogout = () => {
-    Alert.alert('Log Out', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Log Out',
-        style: 'destructive',
-        onPress: () => {
-          logout();
-          // Reset stack để không thể back lại
-          navigation.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Login' }],
-            })
-          );
+    if (Platform.OS === 'web') {
+      if (window.confirm('Are you sure you want to log out?')) {
+        logout();
+        navigation.navigate('Login');
+      }
+    } else {
+      Alert.alert('Log Out', 'Are you sure you want to log out?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: () => {
+            logout();
+            navigation.dispatch(
+              CommonActions.reset({
+                index: 0,
+                routes: [{ name: 'Login' }],
+              })
+            );
+          },
         },
-      },
-    ]);
+      ]);
+    }
   };
 
   // --- 2. CHỨC NĂNG CẬP NHẬT TÊN (API PUT /profile) ---
   const saveProfile = async () => {
     if (!tempName.trim()) {
-      Alert.alert('Error', 'Name cannot be empty');
+      showAlert('Error', 'Name cannot be empty');
       return;
     }
 
@@ -110,7 +118,6 @@ const ProfileScreen = ({ navigation }: any) => {
         },
         body: JSON.stringify({
           full_name: tempName,
-          // Giữ nguyên avatar cũ, chỉ đổi tên
           avatar_url: user.avatar_url,
         }),
       });
@@ -118,14 +125,14 @@ const ProfileScreen = ({ navigation }: any) => {
       const data = await response.json();
 
       if (response.ok) {
-        await updateUser(data.user); // Cập nhật Context
+        await updateUser(data.user);
         setIsEditing(false);
-        Alert.alert('Success', 'Profile updated successfully');
+        showAlert('Success', 'Profile updated successfully');
       } else {
-        Alert.alert('Error', data.message || 'Update failed');
+        showAlert('Error', data.message || 'Update failed');
       }
     } catch {
-      Alert.alert('Error', 'Network error');
+      showAlert('Error', 'Network error');
     } finally {
       setIsLoading(false);
     }
@@ -148,19 +155,27 @@ const ProfileScreen = ({ navigation }: any) => {
     try {
       // b. Tạo FormData chứa file
       const formData = new FormData();
-      formData.append('avatar', {
-        uri:
-          Platform.OS === 'ios' ? asset.uri?.replace('file://', '') : asset.uri,
-        type: asset.type || 'image/jpeg',
-        name: asset.fileName || `avatar-${Date.now()}.jpg`,
-      } as any);
+      const fileName = asset.fileName || `avatar-${Date.now()}.jpg`;
+
+      if (Platform.OS === 'web') {
+        // Web: uri là blob object-URL -> cần lấy Blob thật trước khi append
+        const blob = await (await fetch(asset.uri!)).blob();
+        formData.append('avatar', blob, fileName);
+      } else {
+        formData.append('avatar', {
+          uri:
+            Platform.OS === 'ios' ? asset.uri?.replace('file://', '') : asset.uri,
+          type: asset.type || 'image/jpeg',
+          name: fileName,
+        } as any);
+      }
 
       // c. Gửi lên Node.js Backend
+      // KHÔNG tự set Content-Type: để fetch gắn boundary cho multipart
       const response = await fetch(`${AUTH_URL}/upload-avatar`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`, // Token xác thực
-          'Content-Type': 'multipart/form-data', // Bắt buộc khi gửi file
         },
         body: formData,
       });
@@ -168,18 +183,15 @@ const ProfileScreen = ({ navigation }: any) => {
       const data = await response.json();
 
       if (response.ok) {
-        // d. Upload thành công -> Backend trả về URL ảnh mới
-        // Cập nhật ngay vào Context để UI hiển thị ảnh mới
         const newUser = { ...user, avatar_url: data.avatar_url };
         await updateUser(newUser);
-
-        Alert.alert('Success', 'Avatar updated successfully!');
+        showAlert('Success', 'Avatar updated successfully!');
       } else {
         throw new Error(data.message || 'Upload failed');
       }
     } catch (error: any) {
       console.error(error);
-      Alert.alert('Error', 'Failed to upload image. Please try again.');
+      showAlert('Error', 'Failed to upload image. Please try again.');
     } finally {
       setIsUploadingImage(false);
     }
@@ -222,7 +234,7 @@ const ProfileScreen = ({ navigation }: any) => {
             ) : (
               <Image
                 source={{
-                  uri: user.avatar_url || 'https://via.placeholder.com/150',
+                  uri: user.avatar_url || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iI2UyZThmMCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iNDgiIGZpbGw9IiM5NGEzYjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7wn5GTPC90ZXh0Pjwvc3ZnPg==',
                 }}
                 style={styles.avatar}
               />

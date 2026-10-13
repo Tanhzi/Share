@@ -11,15 +11,14 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
 import { DOCUMENT_URL } from '../config/env';
 import { useFocusEffect } from '@react-navigation/native';
 import GuestPlaceholder from '../components/GuestPlaceholder';
-import { apiGet, apiPost, apiDelete } from '../api/client';
-import DocumentItem from '../components/myshares/DocumentItem';
-import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { apiGet, apiPut, apiDelete } from '../api/client';
 import { formatBytes } from '../utils/format';
 
 const COLORS = {
@@ -34,7 +33,6 @@ const DOC_URL = DOCUMENT_URL;
 
 const MySharesScreen = ({ navigation }: any) => {
   const { isLoggedIn, token } = useAuth();
-  const { isConnected, isInternetReachable } = useNetworkStatus();
 
   const [shares, setShares] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -63,10 +61,11 @@ const MySharesScreen = ({ navigation }: any) => {
   const fetchMyShares = useCallback(async () => {
     if (!token) return;
     try {
-      const data = await apiGet(`${DOC_URL}/my-documents`, token);
+      const data = await apiGet<{ documents?: any[] }>(`${DOC_URL}/my-documents`, token ?? undefined);
 
       // Map dữ liệu từ Supabase (snake_case) sang UI (camelCase)
-      const mappedData = data.documents.map((doc: any) => {
+      const documents = Array.isArray(data?.documents) ? data.documents : [];
+      const mappedData = documents.map((doc: any) => {
         return {
           id: doc.id,
           name: doc.name,
@@ -77,10 +76,10 @@ const MySharesScreen = ({ navigation }: any) => {
           originalType: doc.file_type, // Lưu type gốc để filter
         };
       });
-      console.log('Mapped data:', mappedData);
       setShares(mappedData);
     } catch (error) {
       console.error('Fetch My Shares Error:', error);
+      Alert.alert('Error', 'Failed to load your shared files. Please try again.');
     } finally {
       setIsLoading(false);
       setRefreshing(false);
@@ -124,19 +123,11 @@ const MySharesScreen = ({ navigation }: any) => {
       isProtected: isPasswordEnabled,
     };
 
-    console.log('Sending password update:', {
-      itemId: selectedItem.id,
-      itemIdType: typeof selectedItem.id,
-      isPasswordEnabled,
-      hasPassword: !!newPassword,
-      fullSelectedItem: selectedItem,
-    });
-
     try {
-      const data = await apiPost(
+      await apiPut(
         `${DOC_URL}/my-documents/${selectedItem.id}/password`,
         requestData,
-        token
+        token ?? undefined
       );
 
       // Update local state
@@ -157,10 +148,7 @@ const MySharesScreen = ({ navigation }: any) => {
   };
 
   const handleOpenPasswordModal = (item: any) => {
-    // Check if we received an event instead of item data
-    if (item && item.nativeEvent) {
-      return;
-    }
+    if (!item) return;
     setSelectedItem(item);
     setIsPasswordEnabled(item.isProtected);
     setNewPassword('');
@@ -182,7 +170,7 @@ const MySharesScreen = ({ navigation }: any) => {
             try {
               await apiDelete(
                 `${DOC_URL}/my-documents/${selectedItem.id}`,
-                token
+                token ?? undefined
               );
               setShares(prev => prev.filter(i => i.id !== selectedItem.id));
               setModalVisible(false);
@@ -232,6 +220,7 @@ const MySharesScreen = ({ navigation }: any) => {
         title="Your Shares"
         subtitle="Sign in to manage files."
         icon="folder-shared"
+        navigation={navigation}
       />
     );
 
@@ -329,7 +318,7 @@ const MySharesScreen = ({ navigation }: any) => {
         ) : (
           <FlatList
             data={filteredShares}
-            keyExtractor={item => item.id || `temp-${Math.random()}`}
+            keyExtractor={(item, index) => item.id || `doc-${index}`}
             renderItem={renderItem}
             refreshControl={
               <RefreshControl
@@ -439,28 +428,37 @@ const MySharesScreen = ({ navigation }: any) => {
       </Modal>
 
       <Modal visible={passwordModalVisible} transparent animationType="slide">
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setPasswordModalVisible(false)}>
-          <View style={styles.modalContent}>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.modalOverlayInner}
+            activeOpacity={1}
+            onPress={() => setPasswordModalVisible(false)}
+          />
+          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
             <View style={styles.modalIndicator} />
             <Text style={styles.modalTitle}>Password Protection</Text>
 
-            <TouchableOpacity
-              style={styles.modalOption}
-              onPress={() => setIsPasswordEnabled(!isPasswordEnabled)}>
-              <Icon
-                name={
-                  isPasswordEnabled ? 'check-box' : 'check-box-outline-blank'
-                }
-                size={24}
-                color={COLORS.primary}
+            <View style={styles.passwordToggleRow}>
+              <View style={styles.passwordToggleInfo}>
+                <Icon
+                  name={isPasswordEnabled ? 'lock' : 'lock-open'}
+                  size={24}
+                  color={isPasswordEnabled ? COLORS.primary : COLORS.slate400}
+                />
+                <Text style={styles.modalOptionText}>
+                  Enable Password Protection
+                </Text>
+              </View>
+              <Switch
+                value={isPasswordEnabled}
+                onValueChange={(val) => {
+                  setIsPasswordEnabled(val);
+                  if (!val) setNewPassword('');
+                }}
+                trackColor={{ false: '#e2e8f0', true: '#bfdbfe' }}
+                thumbColor={isPasswordEnabled ? COLORS.primary : '#f1f5f9'}
               />
-              <Text style={styles.modalOptionText}>
-                Enable Password Protection
-              </Text>
-            </TouchableOpacity>
+            </View>
 
             {isPasswordEnabled && (
               <View style={styles.passwordInputContainer}>
@@ -471,6 +469,7 @@ const MySharesScreen = ({ navigation }: any) => {
                   onChangeText={setNewPassword}
                   secureTextEntry
                   placeholderTextColor={COLORS.slate400}
+                  autoFocus
                 />
               </View>
             )}
@@ -491,7 +490,7 @@ const MySharesScreen = ({ navigation }: any) => {
               <Text style={styles.saveButtonText}>Save Changes</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -627,6 +626,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  modalOverlayInner: {
+    flex: 1,
+  },
   modalContent: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
@@ -648,6 +650,19 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     color: COLORS.text,
     textAlign: 'center',
+  },
+  passwordToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  passwordToggleInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
   },
   modalOption: {
     flexDirection: 'row',

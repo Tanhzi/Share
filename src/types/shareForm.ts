@@ -60,11 +60,14 @@ export function shareFormReducer(
 ): ShareFormData {
   switch (action.type) {
     case 'SET_CATEGORY':
+      // Chỉ xóa selectedFile khi chuyển giữa file và text/link
+      const currentIsFile = ['Photos', 'Videos', 'Files'].includes(state.category);
+      const nextIsFile = ['Photos', 'Videos', 'Files'].includes(action.payload);
+      const shouldClearFile = currentIsFile !== nextIsFile;
       return {
         ...state,
         category: action.payload,
-        selectedFile:
-          action.payload === state.category ? state.selectedFile : null,
+        selectedFile: shouldClearFile ? null : state.selectedFile,
       };
     case 'SET_LINK_INPUT':
       return { ...state, linkContent: action.payload };

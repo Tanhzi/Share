@@ -36,7 +36,13 @@ export const useNetworkStatus = () => {
         return await fn();
       } catch (error) {
         lastError = error as Error;
-        
+
+        // Lỗi client (4xx - sai mật khẩu, 404, 400...) không retry cho tốn thời gian
+        const status = (error as any)?.status;
+        if (typeof status === 'number' && status >= 400 && status < 500) {
+          throw error;
+        }
+
         if (attempt < maxRetries) {
           const delayTime = BASE_DELAY_MS * Math.pow(2, attempt);
           console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delayTime}ms`);

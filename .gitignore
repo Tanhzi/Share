@@ -2,6 +2,9 @@
 #
 .DS_Store
 
+#code
+.kilo/
+
 # Xcode
 #
 build/
@@ -40,6 +43,7 @@ local.properties
 node_modules/
 npm-debug.log
 yarn-error.log
+*.log
 
 # Environment variables
 #
@@ -48,6 +52,7 @@ yarn-error.log
 .env.development
 .env.test
 .env.production
+.env.web
 
 # fastlane
 #
@@ -81,3 +86,7 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Web build output
+/dist
+/web-build

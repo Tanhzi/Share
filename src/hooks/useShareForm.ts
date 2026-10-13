@@ -4,7 +4,7 @@ import { useState, useCallback, useReducer } from 'react';
 import { Alert, Platform, PermissionsAndroid } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import { launchCamera } from 'react-native-image-picker';
-import * as DocumentPicker from '@react-native-documents/picker';
+import { pick, types, errorCodes, isErrorWithCode } from '@react-native-documents/picker';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { useAuth } from '../context/AuthContext';
 import { DOCUMENT_URL } from '../config/env';
@@ -41,6 +41,15 @@ const shouldSharePublicly = (userToken: string | null): boolean => {
 return !userToken;
 };
 
+const detectFileType = (fileName: string): ShareCategory => {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'heic', 'heif'];
+  const videoExts = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', '3gp', 'm4v', 'ts'];
+  if (imageExts.includes(ext)) return 'Photos';
+  if (videoExts.includes(ext)) return 'Videos';
+  return 'Files';
+};
+
 const LARGE_FILE_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 class UploadError extends Error {
@@ -71,6 +80,7 @@ setSelectedFile: (file: ShareFile | null) => void;
 setExpiration: (value: string) => void;
 setIsAnonymous: (value: boolean) => void;
 setIsPasswordProtected: (value: boolean) => void;
+setIsPublicSharing: (value: boolean) => void;
 setPassword: (value: string) => void;
 
 // File operations
@@ -100,24 +110,24 @@ export const useShareForm = (navigation: any): UseShareFormReturn => {
   const validate = useCallback((): boolean => {
     const newErrors: Record<string, string> = {};
 
-if (formData.category === 'Links' && !validateLink(formData.linkContent)) {
-newErrors.linkInput = 'Please enter a valid link';
-}
+    if (formData.category === 'Links' && !validateLink(formData.linkContent)) {
+      newErrors.linkInput = 'Please enter a valid link';
+    }
 
-if (formData.category === 'Text' && !formData.textContent.trim()) {
-newErrors.textInput = 'Please enter content to share';
-}
+    if (formData.category === 'Text' && !formData.textContent.trim()) {
+      newErrors.textInput = 'Please enter content to share';
+    }
 
-if (
-['Photos', 'Videos', 'Files'].includes(formData.category) &&
-!formData.selectedFile
-) {
-newErrors.file = 'Please select content before sharing';
-}
+    if (
+      ['Photos', 'Videos', 'Files'].includes(formData.category) &&
+      !formData.selectedFile
+    ) {
+      newErrors.file = 'Please select a file to share';
+    }
 
-if (formData.isPasswordProtected && !validatePassword(formData.password)) {
-newErrors.password = 'Password must be at least 4 characters';
-}
+    if (formData.isPasswordProtected && !validatePassword(formData.password)) {
+      newErrors.password = 'Password must be at least 4 characters';
+    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -204,10 +214,10 @@ return;
         } else {
           const mimeTypes =
             mediaCategory === 'Videos'
-              ? [DocumentPicker.types.video]
-              : [DocumentPicker.types.images];
+              ? [types.video]
+              : [types.images];
 
-          const res = await DocumentPicker.pick({
+          const res = await pick({
             allowMultiSelection: false,
             type: mimeTypes,
           });
@@ -227,39 +237,39 @@ return;
           }
         }
 } catch (err: any) {
-if (err?.message !== 'User canceled document picker') {
+if (isErrorWithCode(err) && err.code === errorCodes.OPERATION_CANCELED) return;
 Alert.alert('Cannot select content', 'Please try again');
-}
 }
 },
 [formData.category]
 );
 
-// Document picker
+// Document picker - unified, auto-detects file type
 const handleSelectDocument = useCallback(async () => {
 try {
-const res = await DocumentPicker.pick({
-allowMultiSelection: false,
-type: [DocumentPicker.types.allFiles],
+const res = await pick({
+  allowMultiSelection: false,
+  type: [types.allFiles],
 });
 
 if (res && res.length > 0) {
-const file = res[0];
-dispatch({ type: 'SET_CATEGORY', payload: 'Files' });
-dispatch({
-type: 'SET_SELECTED_FILE',
-payload: {
-uri: file.uri || '',
-name: file.name || '',
-type: file.type || '',
-size: file.size || 0,
-},
-});
+  const file = res[0];
+  const fileName = file.name || '';
+  const detectedCategory = detectFileType(fileName);
+  dispatch({ type: 'SET_CATEGORY', payload: detectedCategory });
+  dispatch({
+    type: 'SET_SELECTED_FILE',
+    payload: {
+      uri: file.uri || '',
+      name: fileName,
+      type: file.type || '',
+      size: file.size || 0,
+    },
+  });
 }
 } catch (err: any) {
-if (err?.message !== 'User canceled document picker') {
+if (isErrorWithCode(err) && err.code === errorCodes.OPERATION_CANCELED) return;
 Alert.alert('Cannot select file', 'Please try again');
-}
 }
 }, []);
 
@@ -300,6 +310,7 @@ return;
         { name: 'category', data: formData.category },
         { name: 'expiration', data: formData.expiration },
         { name: 'isAnonymous', data: String(formData.isAnonymous) },
+        { name: 'isPublicSharing', data: String(formData.isPublicSharing) },
         { name: 'latitude', data: String(latitude) },
         { name: 'longitude', data: String(longitude) },
       ];
@@ -512,6 +523,10 @@ return `Upload failed with status ${status || 'unknown'}`;
     dispatch({ type: 'SET_IS_PASSWORD_PROTECTED', payload: value });
   }, []);
 
+  const setIsPublicSharing = useCallback((value: boolean) => {
+    dispatch({ type: 'SET_IS_PUBLIC_SHARING', payload: value });
+  }, []);
+
 const setPassword = useCallback((value: string) => {
 dispatch({ type: 'SET_PASSWORD', payload: value });
 }, []);
@@ -529,6 +544,7 @@ setSelectedFile,
 setExpiration,
 setIsAnonymous,
 setIsPasswordProtected,
+setIsPublicSharing,
 setPassword,
 handleSelectMedia,
 handleSelectDocument,

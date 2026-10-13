@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build:web",
+  "outputDirectory": "dist",
+  "devCommand": "npm run web",
+  "routes": [
+    {
+      "src": "/[^.]+",
+      "dest": "/",
+      "status": 200
+    }
+  ]
+}

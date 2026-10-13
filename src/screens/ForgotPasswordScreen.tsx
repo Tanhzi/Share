@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { API_URL } from '../config/env';
+import { AUTH_URL } from '../config/env';
 
 const ForgotPasswordScreen = ({ navigation }: any) => {
   // Trạng thái bước: 1 = Nhập Email, 2 = Nhập Code & Pass mới
@@ -32,7 +32,7 @@ const ForgotPasswordScreen = ({ navigation }: any) => {
     setIsLoading(true);
     try {
       // Gọi API Backend
-      const response = await fetch(`${API_URL}/forgot-password`, {
+      const response = await fetch(`${AUTH_URL}/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
@@ -41,9 +41,10 @@ const ForgotPasswordScreen = ({ navigation }: any) => {
       const data = await response.json();
 
       if (response.ok) {
+        // BE luôn trả 200 với message chung để không lộ email có tồn tại hay không (B10)
         Alert.alert(
-          'Đã gửi mã!',
-          'Vui lòng kiểm tra email của bạn để lấy mã xác nhận.'
+          'Đã gửi yêu cầu',
+          data.message || 'Nếu email đã đăng ký trong hệ thống, mã xác nhận đã được gửi đến email của bạn.'
         );
         setStep(2); // Chuyển sang giao diện nhập mã
       } else {
@@ -71,7 +72,7 @@ const ForgotPasswordScreen = ({ navigation }: any) => {
     setIsLoading(true);
     try {
       // Gọi API Backend reset-password
-      const response = await fetch(`${API_URL}/reset-password`, {
+      const response = await fetch(`${AUTH_URL}/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

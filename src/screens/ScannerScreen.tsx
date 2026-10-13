@@ -33,7 +33,7 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { apiGet, apiPost } from '../api/client';
 
 const DOC_URL = DOCUMENT_URL;
-const FILTER_TYPES = ['All', 'PDF', 'Images', 'Videos', 'Archives', 'Docs'];
+const FILTER_TYPES = ['All', 'Protected', 'Public', 'Video', 'Image', 'File', 'Text', 'Link'];
 const COLORS = {
   primary: '#2563EB',
   text: '#0f172a',
@@ -46,6 +46,52 @@ const COLORS = {
 
 const getScanNetworkErrorMessage = () => {
   return 'Không thể kết nối server. Kiểm tra backend và API_URL.';
+};
+
+const getAndroidSdkVersion = () => {
+  return typeof Platform.Version === 'number'
+    ? Platform.Version
+    : parseInt(String(Platform.Version), 10);
+};
+
+const getMimeType = (fileName: string) => {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const mimeMap: Record<string, string> = {
+    pdf: 'application/pdf',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    txt: 'text/plain',
+    zip: 'application/zip',
+  };
+
+  return ext ? mimeMap[ext] || 'application/octet-stream' : 'application/octet-stream';
+};
+
+const requestLegacyAndroidDownloadPermission = async () => {
+  if (Platform.OS !== 'android' || getAndroidSdkVersion() >= 29) {
+    return true;
+  }
+
+  const granted = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+    {
+      title: 'Storage Permission',
+      message: 'ShareDocu needs storage permission to save files to Downloads.',
+      buttonPositive: 'OK',
+    }
+  );
+
+  return granted === PermissionsAndroid.RESULTS.GRANTED;
 };
 
 const ScannerScreen = ({ navigation }: any) => {
@@ -62,13 +108,15 @@ const ScannerScreen = ({ navigation }: any) => {
   const [refreshing, setRefreshing] = useState(false);
 
   // Filter State
-  const [showFilter, setShowFilter] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
 
   // Password Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
   const [isVerifying, setIsVerifying] = useState(false);
+
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
 
   // Helper: Format Bytes
   const formatBytes = (bytes: number, decimals = 2) => {
@@ -83,11 +131,12 @@ const ScannerScreen = ({ navigation }: any) => {
 
   // Helper: Convert DB type to UI type
   const getFileType = (dbType: string) => {
-    const type = dbType.toLowerCase();
-    if (type.includes('photo') || type.includes('image')) return 'jpg';
-    if (type.includes('video')) return 'mp4';
+    const type = (dbType || '').toLowerCase();
+    if (type.includes('photo') || type.includes('image') || type === 'jpg' || type === 'jpeg' || type === 'png') return 'jpg';
+    if (type.includes('video') || type === 'mp4' || type === 'mov') return 'mp4';
     if (type.includes('pdf')) return 'pdf';
     if (type.includes('link')) return 'link';
+    if (type.includes('text') || type === 'txt') return 'file';
     return 'file';
   };
 
@@ -172,13 +221,20 @@ const handleScan = useCallback(async () => {
 
     if (Array.isArray(data?.documents)) {
       const mappedDocs = data.documents.map((doc: any) => {
-        const distanceVal = Math.floor(Math.random() * 30) + 1;
+        // Khoảng cách thật từ server (nếu RPC trả về), không bịa số ngẫu nhiên
+        const rawDistance = doc.distance ?? doc.dist_m;
+        const distance =
+          rawDistance === null || rawDistance === undefined || rawDistance === ''
+            ? null
+            : typeof rawDistance === 'number'
+              ? `${Math.round(rawDistance)}m`
+              : String(rawDistance);
         return {
           id: doc.id,
           name: doc.name,
           type: getFileType(doc.file_type),
-          ownerDevice: doc.is_anonymous ? 'Anonymous' : 'Unknown Device',
-          distance: `${distanceVal}m`,
+          ownerDevice: doc.is_anonymous || !doc.owner_name ? 'Anonymous' : doc.owner_name,
+          distance,
           size: formatBytes(doc.file_size),
           isProtected: doc.is_protected,
           url: doc.file_url,
@@ -199,31 +255,57 @@ const handleScan = useCallback(async () => {
 }, [token, isConnected, getCurrentLocation, executeWithRetry]);
 
   // --- 2. TẢI FILE ---
-  const downloadFile = async (url: string, fileName: string) => {
+  const downloadFile = async (url: string, fileName: string, onProgress: (pct: number) => void): Promise<void> => {
     const { dirs } = ReactNativeBlobUtil.fs;
-    const path =
-      Platform.OS === 'ios'
-        ? `${dirs.DocumentDir}/${fileName}`
-        : `${dirs.DownloadDir}/${fileName}`;
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const mimeType = getMimeType(fileName);
+    const canSaveToDownloads = await requestLegacyAndroidDownloadPermission();
 
-    Alert.alert('Downloading', `Starting download for ${fileName}...`);
-
-    try {
-      await ReactNativeBlobUtil.config({
-        fileCache: true,
-        addAndroidDownloads: {
-          useDownloadManager: true,
-          notification: true,
-          path: path,
-          description: 'Downloading document from ShareApp',
-          title: fileName,
-          mediaScannable: true,
-        },
-      }).fetch('GET', url);
-      Alert.alert('Success', `File saved to: ${path}`);
-    } catch {
-      Alert.alert('Error', 'Download failed.');
+    if (!canSaveToDownloads) {
+      throw new Error('Storage permission denied.');
     }
+
+    const sdkVersion = getAndroidSdkVersion();
+    const legacyDownloadDir = dirs.LegacyDownloadDir || dirs.DownloadDir;
+    const androidDownloadOptions =
+      sdkVersion >= 29
+        ? {
+            useDownloadManager: true,
+            notification: true,
+            title: safeName,
+            description: 'Downloading document from ShareDocu',
+            mime: mimeType,
+            mediaScannable: true,
+            storeInDownloads: true,
+          }
+        : {
+            useDownloadManager: true,
+            notification: true,
+            path: `${legacyDownloadDir}/${safeName}`,
+            title: safeName,
+            description: 'Downloading document from ShareDocu',
+            mime: mimeType,
+            mediaScannable: true,
+          };
+
+    const downloadTask = ReactNativeBlobUtil.config({
+      fileCache: true,
+      addAndroidDownloads: androidDownloadOptions,
+    }).fetch('GET', url, {
+      Accept: '*/*',
+    });
+
+    downloadTask.progress({ interval: 250 }, (received: number, total: number) => {
+      if (total > 0) {
+        const pct = Math.min(99, Math.round((received / total) * 100));
+        onProgress(pct);
+      }
+    });
+
+    await downloadTask;
+
+    onProgress(100);
+    Alert.alert('Success', `${fileName} saved to the Downloads folder.`);
   };
 
   // --- 3. XỬ LÝ NHẤN VÀO TÀI LIỆU ---
@@ -260,7 +342,7 @@ const handleScan = useCallback(async () => {
       setSelectedDoc(doc);
       setModalVisible(true);
     } else {
-      checkPasswordAndDownload(doc.id, doc.name, '');
+      checkPasswordAndDownload(doc.id, doc.name, '', isLinkDocument(doc));
     }
   };
 
@@ -268,8 +350,9 @@ const handleScan = useCallback(async () => {
 const checkPasswordAndDownload = async (
   docId: string,
   docName: string,
-  password: string
-) => {
+  password: string,
+  isLink: boolean
+): Promise<boolean> => {
   setIsVerifying(true);
   try {
     const verifyEndpoint = token
@@ -286,27 +369,44 @@ const checkPasswordAndDownload = async (
 
     if (data && data.downloadUrl) {
       setModalVisible(false);
-      if (selectedDoc && isLinkDocument(selectedDoc)) {
+      setSelectedDoc(null);
+      if (isLink) {
         const normalizedUrl = normalizeUrl(data.downloadUrl);
         if (normalizedUrl) {
           await Linking.openURL(normalizedUrl);
         }
       } else {
-        await downloadFile(data.downloadUrl, docName);
+        setDownloadingId(docId);
+        setDownloadProgress(0);
+        try {
+          await downloadFile(data.downloadUrl, docName, (pct) => {
+            setDownloadProgress(pct);
+          });
+        } finally {
+          setDownloadingId(null);
+          setDownloadProgress(0);
+        }
       }
+      return true;
     } else {
       Alert.alert('Error', data?.message || 'Server error');
+      return false;
     }
   } catch (error: any) {
     const errorMessage = error.message?.toLowerCase() || '';
-    Alert.alert(
-      'Error',
-      errorMessage.includes('invalid password')
-        ? 'Invalid password'
-        : errorMessage.includes('document not found')
-        ? 'Document not found'
-        : 'Network error verifying password.'
-    );
+    const status = error.status;
+    let text = 'Network error verifying password.';
+    if (status === 401 || errorMessage.includes('incorrect password') || errorMessage.includes('invalid password')) {
+      text = 'Incorrect password';
+    } else if (status === 404 || errorMessage.includes('document not found')) {
+      text = 'Document not found';
+    } else if (status === 410 || errorMessage.includes('expired')) {
+      text = 'Document has expired';
+    } else if (errorMessage.includes('password is required')) {
+      text = 'Password is required';
+    }
+    Alert.alert('Error', text);
+    return false;
   } finally {
     setIsVerifying(false);
   }
@@ -316,7 +416,7 @@ const checkPasswordAndDownload = async (
 useFocusEffect(
   useCallback(() => {
     handleScan();
-  }, [handleScan, executeWithRetry])
+  }, [handleScan])
 );
 
   const onRefresh = () => {
@@ -362,14 +462,13 @@ useFocusEffect(
   const filteredDocs = useMemo(() => {
     if (activeFilter === 'All') return documents;
     return documents.filter(doc => {
-      if (activeFilter === 'PDF') return doc.type === 'pdf';
-      if (activeFilter === 'Images')
-        return ['jpg', 'png', 'jpeg'].includes(doc.type);
-      if (activeFilter === 'Videos') return ['mp4', 'mov'].includes(doc.type);
-      if (activeFilter === 'Docs')
-        return ['docx', 'txt', 'doc', 'file'].includes(doc.type);
-      if (activeFilter === 'Archives')
-        return ['zip', 'rar', '7z'].includes(doc.type);
+      if (activeFilter === 'Protected') return doc.isProtected;
+      if (activeFilter === 'Public') return !doc.isProtected;
+      if (activeFilter === 'Video') return doc.type === 'mp4';
+      if (activeFilter === 'Image') return ['jpg', 'png', 'jpeg'].includes(doc.type);
+      if (activeFilter === 'File') return ['pdf', 'docx', 'zip', 'file'].includes(doc.type);
+      if (activeFilter === 'Text') return doc.type === 'txt' || doc.type === 'file';
+      if (activeFilter === 'Link') return doc.type === 'link';
       return true;
     });
   }, [activeFilter, documents]);
@@ -457,7 +556,7 @@ useFocusEffect(
           )}
         </View>
 
-        {/* List Header & Filter Toggle */}
+        {/* List Header */}
         <View style={styles.listHeader}>
           <View>
             <Text style={styles.sectionTitle}>NEARBY DOCUMENTS</Text>
@@ -465,44 +564,49 @@ useFocusEffect(
               Found {filteredDocs.length} items nearby
             </Text>
           </View>
-          <TouchableOpacity
-            style={[
-              styles.iconBtn,
-              showFilter && { backgroundColor: COLORS.primary },
-            ]}
-            onPress={() => setShowFilter(!showFilter)}>
-            <Icon
-              name="filter-list"
-              size={24}
-              color={showFilter ? '#fff' : COLORS.text}
-            />
-          </TouchableOpacity>
         </View>
 
-        {/* Filter Bar */}
-        {showFilter && (
-          <View style={styles.filterBar}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {FILTER_TYPES.map(type => (
+        {/* Filter Bar - Always Visible */}
+        <View style={styles.filterBar}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {FILTER_TYPES.map(type => {
+              const isActive = activeFilter === type;
+              const iconMap: Record<string, string> = {
+                All: 'tune',
+                Protected: 'lock',
+                Public: 'public',
+                Video: 'videocam',
+                Image: 'image',
+                File: 'folder',
+                Text: 'notes',
+                Link: 'link',
+              };
+              return (
                 <TouchableOpacity
                   key={type}
                   style={[
                     styles.filterChip,
-                    activeFilter === type && styles.filterChipActive,
+                    isActive && styles.filterChipActive,
                   ]}
                   onPress={() => setActiveFilter(type)}>
+                  <Icon
+                    name={iconMap[type] || 'label'}
+                    size={14}
+                    color={isActive ? '#fff' : COLORS.slate400}
+                    style={{ marginRight: 4 }}
+                  />
                   <Text
                     style={[
                       styles.filterText,
-                      activeFilter === type && styles.filterTextActive,
+                      isActive && styles.filterTextActive,
                     ]}>
                     {type}
                   </Text>
                 </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
+              );
+            })}
+          </ScrollView>
+        </View>
 
         {/* Document List */}
         <View style={{ gap: 12 }}>
@@ -518,6 +622,8 @@ useFocusEffect(
                 key={doc.id}
                 document={doc}
                 onPress={() => handleDocumentPress(doc)}
+                downloading={downloadingId === doc.id}
+                downloadProgress={downloadProgress}
               />
             ))
           ) : (
@@ -551,11 +657,14 @@ useFocusEffect(
       {/* Modal Password */}
       <PasswordModal
         visible={modalVisible}
-        onClose={() => setModalVisible(false)}
-        onVerify={pwd => {
-          if (selectedDoc) {
-            checkPasswordAndDownload(selectedDoc.id, selectedDoc.name, pwd);
-          }
+        onClose={() => {
+          setModalVisible(false);
+          setSelectedDoc(null);
+        }}
+        onVerify={async pwd => {
+          if (!selectedDoc) return false;
+          const doc = selectedDoc;
+          return await checkPasswordAndDownload(doc.id, doc.name, pwd, isLinkDocument(doc));
         }}
         isLoading={isVerifying}
         docName={selectedDoc?.name}
@@ -586,9 +695,14 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 10, color: COLORS.secondary, fontWeight: 'bold' },
-  filterBar: { marginBottom: 16 },
+  filterBar: {
+    marginBottom: 16,
+    paddingVertical: 4,
+  },
   filterChip: {
-    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: '#fff',
@@ -596,7 +710,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  filterChipActive: { backgroundColor: COLORS.text, borderColor: COLORS.text },
+  filterChipActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
   filterText: { fontSize: 12, fontWeight: 'bold', color: COLORS.slate400 },
   filterTextActive: { color: '#fff' },
   content: { padding: 24, paddingBottom: 100 },

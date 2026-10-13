@@ -16,6 +16,23 @@ export class ApiError extends Error {
   }
 }
 
+// --- Xử lý 401 (token hết hạn / bị thu hồi) ---
+// AuthContext đăng ký callback để tự logout, tránh circular import.
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+export const setUnauthorizedHandler = (handler: UnauthorizedHandler | null): void => {
+  unauthorizedHandler = handler;
+};
+
+// 401 từ lỗi xác thực nghiệp vụ (sai mật khẩu...) KHÔNG được coi là token hết hạn
+const BUSINESS_401_PATTERNS = ['incorrect password', 'password required'];
+
+const isSessionExpired401 = (message: string): boolean => {
+  const lower = message.toLowerCase();
+  return !BUSINESS_401_PATTERNS.some(p => lower.includes(p));
+};
+
 const getHeaders = (token?: string): Record<string, string> => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -40,12 +57,33 @@ export async function apiCall<T>(
   try {
     const response = await fetch(url, {
       ...fetchOptions,
-      headers: getHeaders(token),
+      // Header của caller ghi đè default, không bị bỏ qua (T14)
+      headers: {
+        ...getHeaders(token),
+        ...(fetchOptions.headers as Record<string, string> | undefined),
+      },
     });
 
-    const data = await response.json();
+    // Đọc text trước để không ném SyntaxError với body rỗng/HTML (T15)
+    const raw = await response.text();
+    let data: any = {};
+    if (raw) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        if (response.ok) {
+          throw new ApiError('Invalid response format', response.status, 'PARSE_ERROR');
+        }
+        data = {};
+      }
+    }
 
     if (!response.ok) {
+      // Token hết hạn / bị thu hồi khi gọi API có kèm token -> đăng xuất
+      if (response.status === 401 && token && isSessionExpired401(data?.message || '')) {
+        unauthorizedHandler?.();
+      }
+
       throw new ApiError(
         data.message || 'API request failed',
         response.status,
@@ -57,10 +95,6 @@ export async function apiCall<T>(
   } catch (error) {
     if (error instanceof ApiError) {
       throw error;
-    }
-
-    if (error instanceof SyntaxError) {
-      throw new ApiError('Invalid response format', 0, 'PARSE_ERROR');
     }
 
     // Thêm thông tin lỗi chi tiết hơn

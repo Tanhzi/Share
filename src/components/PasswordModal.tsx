@@ -16,7 +16,8 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 interface PasswordModalProps {
   visible: boolean;
   onClose: () => void;
-  onVerify: (password: string) => void;
+  /** Trả về true nếu mật khẩu đúng, false nếu sai (dùng để đếm lần thử & khóa) */
+  onVerify: (password: string) => boolean | Promise<boolean>;
   isLoading: boolean;
   docName?: string;
   isLink?: boolean;
@@ -45,10 +46,12 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
         setAttempts(0);
         setIsLocked(false);
       }
+      // Xóa mật khẩu cũ khi mở lại modal
+      setPassword('');
     }
   }, [visible, lastAttemptTime]);
 
-  const handleVerify = () => {
+  const handleVerify = async () => {
     if (isLocked) {
       const remainingTime = Math.ceil((LOCKOUT_TIME_MS - (Date.now() - lastAttemptTime)) / 60000);
       Alert.alert(
@@ -63,9 +66,31 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
       return;
     }
 
-    onVerify(password);
-    setAttempts(prev => prev + 1);
+    let success = false;
+    try {
+      success = await Promise.resolve(onVerify(password));
+    } catch {
+      success = false;
+    }
+
+    if (success) {
+      setAttempts(0);
+      setPassword('');
+      return;
+    }
+
+    // Chỉ đếm lần THẤT BẠI
+    const nextAttempts = attempts + 1;
+    setAttempts(nextAttempts);
     setLastAttemptTime(Date.now());
+
+    if (nextAttempts >= MAX_ATTEMPTS) {
+      setIsLocked(true);
+      Alert.alert(
+        'Too Many Attempts',
+        `Too many failed attempts. Locked for 1 hour after ${MAX_ATTEMPTS} failed attempts.`
+      );
+    }
   };
 
   const handleCancel = () => {
@@ -121,6 +146,7 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
           <Text style={styles.cancelBtnText}>Cancel</Text>
         </TouchableOpacity>
         <TouchableOpacity
+          testID="confirm-button"
           style={[styles.modalBtn, styles.confirmBtn]}
           onPress={handleVerify}
           disabled={isLoading || isLocked}>

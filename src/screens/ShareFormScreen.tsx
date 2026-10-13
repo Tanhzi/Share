@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,402 +14,169 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useShareForm } from '../hooks/useShareForm';
+import { useWebDragDrop } from '../hooks/useWebDragDrop';
+import { useAuth } from '../context/AuthContext';
+import { SYNC_URL } from '../config/env';
+import { apiGet } from '../api/client';
+import { getParams } from '../utils/SimpleNavigation';
 import { COLORS } from '../constants/appColors';
 import type { ShareCategory } from '../types/shareForm';
 
 const EXPIRATION_OPTIONS = ['1 hour', '6 hours', '1 day', '3 days', '7 days'];
 
-type QuickShareAction = {
-  category: ShareCategory;
-  title: string;
-  subtitle: string;
-  icon: string;
-  tone: string;
-  onPress: () => void;
-};
-
 const CATEGORY_LABELS: Record<ShareCategory, string> = {
-Photos: 'Photos',
-Videos: 'Videos',
-Files: 'Files',
-Links: 'Links',
-Text: 'Text',
+  Photos: 'Photos',
+  Videos: 'Videos',
+  Files: 'Files',
+  Links: 'Links',
+  Text: 'Text',
 };
 
 const EXPIRATION_LABELS: Record<string, string> = {
-'1 hour': '1 hour',
-'6 hours': '6 hours',
-'1 day': '1 day',
-'3 days': '3 days',
-'7 days': '7 days',
+  '1 hour': '1 hour',
+  '6 hours': '6 hours',
+  '1 day': '1 day',
+  '3 days': '3 days',
+  '7 days': '7 days',
 };
 
 const formatFileSize = (size = 0) => {
-if (!size) {
-return 'Unknown size';
-}
-
-if (size < 1024 * 1024) {
-return `${(size / 1024).toFixed(1)} KB`;
-}
-
-return `${(size / 1024 / 1024).toFixed(2)} MB`;
+  if (!size) return 'Unknown size';
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
 };
 
-const ShareFormScreen = ({ navigation }: any) => {
-const {
-formData,
-isLoading,
-uploadProgress,
-errors,
-setCategory,
-setLinkInput,
-setTextInput,
-setExpiration,
-setIsAnonymous,
-setIsPasswordProtected,
-setPassword,
-handleSelectMedia,
-handleSelectDocument,
-handleShare,
-} = useShareForm(navigation);
+const detectFileType = (fileName: string): ShareCategory => {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'heic', 'heif'];
+  const videoExts = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', '3gp', 'm4v', 'ts'];
+  const audioExts = ['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a', 'wma'];
+  const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv'];
+  const archiveExts = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'];
 
-  const handleSetCategory = (cat: string) => {
-    setCategory(cat as ShareCategory);
+  if (imageExts.includes(ext)) return 'Photos';
+  if (videoExts.includes(ext)) return 'Videos';
+  if (audioExts.includes(ext)) return 'Files';
+  if (docExts.includes(ext)) return 'Files';
+  if (archiveExts.includes(ext)) return 'Files';
+  return 'Files';
+};
+
+const getFileIcon = (fileName: string): string => {
+  const type = detectFileType(fileName);
+  switch (type) {
+    case 'Photos': return 'image';
+    case 'Videos': return 'videocam';
+    default: return 'insert-drive-file';
+  }
+};
+
+const getFileIconColor = (fileName: string): string => {
+  const type = detectFileType(fileName);
+  switch (type) {
+    case 'Photos': return '#a855f7';
+    case 'Videos': return '#f43f5e';
+    default: return '#6366f1';
+  }
+};
+
+const detectTextType = (text: string): 'link' | 'text' => {
+  const trimmed = text.trim();
+  if (trimmed.match(/^https?:\/\//i)) return 'link';
+  return 'text';
+};
+
+const ShareFormScreen = ({ navigation, route }: any) => {
+  const {
+    formData,
+    isLoading,
+    uploadProgress,
+    errors,
+    setCategory,
+    setLinkInput,
+    setTextInput,
+    setExpiration,
+    setIsAnonymous,
+    setIsPasswordProtected,
+    setIsPublicSharing,
+    setPassword,
+    setSelectedFile,
+    handleSelectDocument,
+    handleSelectMedia,
+    handleShare,
+  } = useShareForm(navigation);
+
+  const { token } = useAuth();
+  const [isLinked, setIsLinked] = useState(false);
+  const [inputMode, setInputMode] = useState<'file' | 'text'>('file');
+  const [textInputValue, setTextInputValue] = useState('');
+
+  // Check if user has linked partner
+  useEffect(() => {
+    (async () => {
+      if (!token) return;
+      try {
+        const data = await apiGet<{ isLinked: boolean }>(`${SYNC_URL}/status`, token);
+        if (data.isLinked) setIsLinked(true);
+      } catch (e) {
+        console.warn('Failed to check sync status', e);
+      }
+    })();
+  }, [token]);
+
+  // Auto-enable linked-only when navigated from Sync "Send File"
+  useEffect(() => {
+    const params = route?.params || navigation?.params || getParams();
+    if (params?.linkedOnly && isLinked) {
+      setIsPublicSharing(true);
+    }
+  }, [isLinked, navigation?.params, route?.params, setIsPublicSharing]);
+
+  const handleFileDrop = useCallback((file: { uri: string; name: string; type: string; size: number }) => {
+    const detectedType = detectFileType(file.name);
+    setCategory(detectedType);
+    setSelectedFile({
+      uri: file.uri,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    });
+  }, [setCategory, setSelectedFile]);
+
+  const { dropRef, isDragging } = useWebDragDrop({
+    onFileDrop: handleFileDrop,
+    enabled: inputMode === 'file' && !formData.selectedFile,
+  });
+
+  const handlePickFile = async () => {
+    await handleSelectDocument();
   };
 
-  const openMediaPicker = (
-    category: Extract<ShareCategory, 'Photos' | 'Videos'>,
-    useCamera: boolean
-  ) => {
-    setCategory(category);
-    handleSelectMedia(useCamera, category);
+  const handleTextChange = (text: string) => {
+    setTextInputValue(text);
+    const type = detectTextType(text);
+    if (type === 'link') {
+      setCategory('Links');
+      setLinkInput(text);
+    } else {
+      setCategory('Text');
+      setTextInput(text);
+    }
   };
-
-  const openDocumentPicker = () => {
-    setCategory('Files');
-    handleSelectDocument();
-  };
-
-const quickActions: QuickShareAction[] = [
-{
-category: 'Photos',
-title: 'Photos',
-subtitle: 'Capture or select photos',
-icon: 'image',
-tone: '#eff6ff',
-onPress: () => openMediaPicker('Photos', false),
-},
-{
-category: 'Videos',
-title: 'Videos',
-subtitle: 'Record or select videos',
-icon: 'videocam',
-tone: '#ecfdf5',
-onPress: () => openMediaPicker('Videos', false),
-},
-{
-category: 'Files',
-title: 'Files',
-subtitle: 'PDF, Word, ZIP...',
-icon: 'upload-file',
-tone: '#f8fafc',
-onPress: openDocumentPicker,
-},
-{
-category: 'Links',
-title: 'Links',
-subtitle: 'Paste URL to share',
-icon: 'link',
-tone: '#fff7ed',
-onPress: () => handleSetCategory('Links'),
-},
-{
-category: 'Text',
-title: 'Text',
-subtitle: 'Notes or messages',
-icon: 'notes',
-tone: '#f5f3ff',
-onPress: () => handleSetCategory('Text'),
-},
-];
 
   const hasShareContent =
-    formData.category === 'Links'
-      ? Boolean(formData.linkContent.trim())
-      : formData.category === 'Text'
-        ? Boolean(formData.textContent.trim())
-        : Boolean(formData.selectedFile);
+    inputMode === 'file'
+      ? Boolean(formData.selectedFile)
+      : Boolean(textInputValue.trim());
 
-  const renderQuickActions = () => (
-    <View style={styles.quickActionsCard}>
-      <View style={styles.sectionHeader}>
-        <View>
-<Text style={styles.sectionTitle}>What do you want to share?</Text>
-<Text style={styles.sectionSubtitle}>
-Select content type, app will open the appropriate tool.
-</Text>
-        </View>
-        <View style={styles.activeTypeBadge}>
-          <Text style={styles.activeTypeText}>
-            {CATEGORY_LABELS[formData.category]}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.quickGrid}>
-        {quickActions.map(action => {
-          const isActive = formData.category === action.category;
-
-          return (
-            <TouchableOpacity
-              key={action.category}
-              style={[
-                styles.quickAction,
-                isActive && styles.activeQuickAction,
-              ]}
-              onPress={action.onPress}
-              activeOpacity={0.82}>
-              <View
-                style={[
-                  styles.quickIcon,
-                  { backgroundColor: action.tone },
-                  isActive && styles.activeQuickIcon,
-                ]}>
-                <Icon
-                  name={action.icon}
-                  size={24}
-                  color={isActive ? '#fff' : COLORS.primary}
-                />
-              </View>
-              <View style={styles.quickCopy}>
-                <Text
-                  style={[
-                    styles.quickTitle,
-                    isActive && styles.activeQuickTitle,
-                  ]}>
-                  {action.title}
-                </Text>
-                <Text style={styles.quickSubtitle}>{action.subtitle}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    </View>
-  );
-
-  const renderUploadArea = () => {
-    if (
-      ['Photos', 'Videos', 'Files'].includes(formData.category) &&
-      formData.selectedFile
-    ) {
-      return (
-        <View style={styles.contentCard}>
-          <View style={styles.selectedFileRow}>
-            <View style={styles.successIcon}>
-              <Icon name="check" size={24} color="#fff" />
-            </View>
-            <View style={styles.selectedFileInfo}>
-              <Text style={styles.uploadTitle} numberOfLines={1}>
-                {formData.selectedFile.name}
-              </Text>
-              <Text style={styles.fileSizeText}>
-                {CATEGORY_LABELS[formData.category]} ·{' '}
-                {formatFileSize(formData.selectedFile.size)}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.buttonRow}>
-            {formData.category !== 'Files' && (
-              <TouchableOpacity
-                style={styles.secondaryBtn}
-                onPress={() =>
-                  openMediaPicker(
-                    formData.category as Extract<
-                      ShareCategory,
-                      'Photos' | 'Videos'
-                    >,
-                    true
-                  )
-                }>
-                <Icon name="photo-camera" size={20} color={COLORS.primary} />
-                <Text style={styles.secondaryBtnText}>
-                  {formData.category === 'Photos' ? 'Chụp lại' : 'Quay lại'}
-                </Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.reselectBtn}
-              onPress={() =>
-                formData.category === 'Files'
-                  ? openDocumentPicker()
-                  : openMediaPicker(
-                      formData.category as Extract<
-                        ShareCategory,
-                        'Photos' | 'Videos'
-                      >,
-                      false
-                    )
-              }>
-              <Icon name="swap-horiz" size={20} color={COLORS.text} />
-              <Text style={styles.reselectText}>Change content</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      );
-    }
-
-    switch (formData.category) {
-      case 'Links':
-        return (
-          <View style={styles.contentCard}>
-            <View style={styles.contentIntro}>
-              <View style={styles.iconCircle}>
-                <Icon name="link" size={30} color={COLORS.primary} />
-              </View>
-              <View style={styles.contentIntroCopy}>
-<Text style={styles.uploadTitle}>Paste link</Text>
-<Text style={styles.helperText}>
-People nearby can open this URL from the scan list.
-</Text>
-              </View>
-            </View>
-<TextInput
-style={styles.textInput}
-placeholder="https://example.com"
-value={formData.linkContent}
-onChangeText={setLinkInput}
-autoCapitalize="none"
-keyboardType="url"
-placeholderTextColor={COLORS.slate400}
-/>
-{errors.linkInput && (
-<Text style={styles.errorText}>{errors.linkInput}</Text>
-)}
-</View>
-);
-
-case 'Text':
-return (
-<View style={styles.contentCard}>
-<View style={styles.contentIntro}>
-<View style={styles.iconCircle}>
-<Icon name="edit-note" size={30} color={COLORS.primary} />
-</View>
-<View style={styles.contentIntroCopy}>
-<Text style={styles.uploadTitle}>Enter content</Text>
-<Text style={styles.helperText}>
-For quick notes, codes, instructions or announcements.
-</Text>
-</View>
-</View>
-<TextInput
-style={[styles.textInput, styles.textArea]}
-placeholder="Enter or paste content to share..."
-value={formData.textContent}
-onChangeText={setTextInput}
-multiline
-textAlignVertical="top"
-placeholderTextColor={COLORS.slate400}
-/>
-{errors.textInput && (
-<Text style={styles.errorText}>{errors.textInput}</Text>
-)}
-</View>
-);
-
-      case 'Photos':
-      case 'Videos':
-        return (
-          <View style={styles.contentCard}>
-            <View style={styles.contentIntro}>
-              <View style={styles.iconCircle}>
-                <Icon
-                  name={
-                    formData.category === 'Photos'
-                      ? 'add-photo-alternate'
-                      : 'video-library'
-                  }
-                  size={34}
-                  color={COLORS.primary}
-                />
-              </View>
-              <View style={styles.contentIntroCopy}>
-<Text style={styles.uploadTitle}>
-{formData.category === 'Photos'
-? 'Select photo to share'
-: 'Select video to share'}
-</Text>
-<Text style={styles.helperText}>
-Use camera or select from device storage.
-</Text>
-              </View>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={styles.secondaryBtn}
-                onPress={() =>
-                  openMediaPicker(
-                    formData.category as Extract<
-                      ShareCategory,
-                      'Photos' | 'Videos'
-                    >,
-                    true
-                  )
-                }>
-                <Icon name="camera-alt" size={24} color={COLORS.primary} />
-<Text style={styles.secondaryBtnText}>
-{formData.category === 'Photos' ? 'Take photo' : 'Record video'}
-</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.selectBtn}
-                onPress={() =>
-                  openMediaPicker(
-                    formData.category as Extract<
-                      ShareCategory,
-                      'Photos' | 'Videos'
-                    >,
-                    false
-                  )
-                }>
-                <Icon name="add" size={24} color="#fff" />
-<Text style={styles.selectBtnText}>
-Select {CATEGORY_LABELS[formData.category].toLowerCase()}
-</Text>
-              </TouchableOpacity>
-            </View>
-            {errors.file && <Text style={styles.errorText}>{errors.file}</Text>}
-          </View>
-        );
-
-default: // Files
-return (
-<View style={styles.contentCard}>
-<View style={styles.contentIntro}>
-<View style={styles.iconCircle}>
-<Icon name="folder-open" size={34} color={COLORS.primary} />
-</View>
-<View style={styles.contentIntroCopy}>
-<Text style={styles.uploadTitle}>Select any file</Text>
-<Text style={styles.helperText}>
-Suitable for documents, compressed files, PDF, Word or other data.
-</Text>
-</View>
-</View>
-<TouchableOpacity
-style={styles.selectBtn}
-onPress={openDocumentPicker}>
-<Icon name="add" size={24} color="#fff" />
-<Text style={styles.selectBtnText}>Browse files</Text>
-</TouchableOpacity>
-{errors.file && <Text style={styles.errorText}>{errors.file}</Text>}
-</View>
-);
-    }
-  };
+  const detectedLabel =
+    inputMode === 'file'
+      ? formData.selectedFile
+        ? CATEGORY_LABELS[detectFileType(formData.selectedFile.name)]
+        : 'File'
+      : detectTextType(textInputValue) === 'link'
+        ? 'Link'
+        : 'Text';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -420,30 +187,203 @@ onPress={openDocumentPicker}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Share Data</Text>
-          <TouchableOpacity onPress={handleShare} disabled={isLoading}>
-            <Text style={styles.shareText}>Send</Text>
+          <Text style={styles.headerTitle}>Share Document</Text>
+          <TouchableOpacity
+            onPress={() => {
+              if (hasShareContent) handleShare();
+            }}
+            disabled={isLoading}>
+            <Text style={[styles.shareText, !hasShareContent && styles.sendDisabled]}>
+              Send
+            </Text>
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={styles.content}>
-          {renderQuickActions()}
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
+          {/* Two Big Cards */}
+          <View style={styles.modeSelector}>
+            <TouchableOpacity
+              style={[
+                styles.modeCard,
+                inputMode === 'file' && styles.modeCardActive,
+              ]}
+              onPress={() => setInputMode('file')}>
+              <View
+                style={[
+                  styles.modeIconBox,
+                  inputMode === 'file' && styles.modeIconBoxActive,
+                ]}>
+                <Icon
+                  name="upload-file"
+                  size={32}
+                  color={inputMode === 'file' ? '#fff' : COLORS.primary}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.modeTitle,
+                  inputMode === 'file' && styles.modeTitleActive,
+                ]}>
+                Upload File
+              </Text>
+              <Text style={styles.modeSub}>
+                Any file type supported
+              </Text>
+            </TouchableOpacity>
 
-          {renderUploadArea()}
+            <TouchableOpacity
+              style={[
+                styles.modeCard,
+                inputMode === 'text' && styles.modeCardActive,
+              ]}
+              onPress={() => setInputMode('text')}>
+              <View
+                style={[
+                  styles.modeIconBox,
+                  inputMode === 'text' && styles.modeIconBoxActive,
+                ]}>
+                <Icon
+                  name="edit-note"
+                  size={32}
+                  color={inputMode === 'text' ? '#fff' : COLORS.primary}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.modeTitle,
+                  inputMode === 'text' && styles.modeTitleActive,
+                ]}>
+                Write / Link
+              </Text>
+              <Text style={styles.modeSub}>
+                Notes, messages, or URLs
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-<View style={styles.settingsCard}>
-<View style={styles.sectionHeader}>
-<View>
-<Text style={styles.sectionTitle}>Access Settings</Text>
-<Text style={styles.sectionSubtitle}>
-These options apply after others scan your content.
-</Text>
-</View>
-</View>
+          {/* File Upload Area */}
+          {inputMode === 'file' && (
+            <View
+              ref={dropRef as any}
+              style={[
+                styles.contentCard,
+                isDragging && styles.contentCardDragging,
+              ]}>
+              {formData.selectedFile ? (
+                <>
+                  <View style={styles.fileInfoRow}>
+                    <View style={styles.fileIconBox}>
+                      <Icon
+                        name={getFileIcon(formData.selectedFile.name)}
+                        size={28}
+                        color={getFileIconColor(formData.selectedFile.name)}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fileName} numberOfLines={2}>
+                        {formData.selectedFile.name}
+                      </Text>
+                      <Text style={styles.fileMeta}>
+                        {CATEGORY_LABELS[detectFileType(formData.selectedFile.name)]} · {formatFileSize(formData.selectedFile.size)}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.changeFileRow}>
+                    <TouchableOpacity
+                      style={styles.changeFileBtn}
+                      onPress={handlePickFile}>
+                      <Icon name="swap-horiz" size={18} color={COLORS.primary} />
+                      <Text style={styles.changeFileText}>Change</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removeFileBtn}
+                      onPress={() => setSelectedFile(null)}>
+                      <Icon name="close" size={18} color={COLORS.danger} />
+                      <Text style={styles.removeFileText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={styles.pickFileArea}
+                    onPress={handlePickFile}>
+                    <View style={styles.pickIconCircle}>
+                      <Icon name="cloud-upload" size={40} color={COLORS.primary} />
+                    </View>
+                    <Text style={styles.pickTitle}>Tap to upload any file</Text>
+                    <Text style={styles.pickSub}>
+                      Images, videos, PDFs, documents, archives & more
+                    </Text>
+                    <Text style={styles.pickHint}>
+                      File type auto-detected by extension
+                    </Text>
+                    {Platform.OS === 'web' && (
+                      <View style={styles.dragHint}>
+                        <Icon name="open-with" size={14} color="#94a3b8" />
+                        <Text style={styles.dragHintText}>
+                          or drag & drop file here
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cameraBtn}
+                    onPress={() => handleSelectMedia(true, 'Photos')}>
+                    <Icon name="photo-camera" size={18} color="#fff" />
+                    <Text style={styles.cameraBtnText}>Take Photo</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              {errors.file && <Text style={styles.errorText}>{errors.file}</Text>}
+            </View>
+          )}
 
-{/* Expiration Time */}
-<View style={styles.settingGroup}>
-<Text style={styles.settingLabel}>Expiration Time</Text>
+          {/* Text / Link Input Area */}
+          {inputMode === 'text' && (
+            <View style={styles.contentCard}>
+              <View style={styles.typeBadge}>
+                <Icon
+                  name={detectTextType(textInputValue) === 'link' ? 'link' : 'notes'}
+                  size={16}
+                  color={COLORS.primary}
+                />
+                <Text style={styles.typeBadgeText}>
+                  {detectTextType(textInputValue) === 'link' ? 'URL Link' : 'Text Note'}
+                </Text>
+              </View>
+              <TextInput
+                style={[styles.textInput, styles.textArea]}
+                placeholder={
+                  detectTextType(textInputValue) === 'link'
+                    ? 'https://example.com'
+                    : 'Enter your note, message, or code...'
+                }
+                value={textInputValue}
+                onChangeText={handleTextChange}
+                multiline
+                textAlignVertical="top"
+                placeholderTextColor={COLORS.slate400}
+              />
+              {errors.textInput && (
+                <Text style={styles.errorText}>{errors.textInput}</Text>
+              )}
+              {errors.linkInput && (
+                <Text style={styles.errorText}>{errors.linkInput}</Text>
+              )}
+            </View>
+          )}
+
+          {/* Settings */}
+          <View style={styles.settingsCard}>
+            <Text style={styles.sectionTitle}>Access Settings</Text>
+
+            {/* Expiration */}
+            <View style={styles.settingGroup}>
+              <Text style={styles.settingLabel}>Expiration Time</Text>
               <View style={styles.chipsContainer}>
                 {EXPIRATION_OPTIONS.map(time => (
                   <TouchableOpacity
@@ -465,124 +405,126 @@ These options apply after others scan your content.
               </View>
             </View>
 
-{/* Password Protection */}
-<View style={styles.settingRow}>
-<View style={styles.settingInfo}>
-<View
-style={[
-styles.iconBox,
-formData.isPasswordProtected && {
-backgroundColor: '#fffbeb',
-},
-]}>
-<Icon
-name="lock"
-size={20}
-color={
-formData.isPasswordProtected ? '#f59e0b' : COLORS.slate400
-}
-/>
-</View>
-<View>
-<Text style={styles.settingRowTitle}>
-Password Protection
-</Text>
-<Text style={styles.settingRowSub}>
-Recipients must enter password
-</Text>
-</View>
-</View>
-<Switch
-value={formData.isPasswordProtected}
-onValueChange={setIsPasswordProtected}
-trackColor={{ false: '#e2e8f0', true: '#fcd34d' }}
-thumbColor={
-formData.isPasswordProtected ? '#f59e0b' : '#f1f5f9'
-}
-/>
-</View>
+            {/* Password */}
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <View style={[styles.iconBox, formData.isPasswordProtected && { backgroundColor: '#fffbeb' }]}>
+                  <Icon
+                    name="lock"
+                    size={20}
+                    color={formData.isPasswordProtected ? '#f59e0b' : COLORS.slate400}
+                  />
+                </View>
+                <View>
+                  <Text style={styles.settingRowTitle}>Password Protection</Text>
+                  <Text style={styles.settingRowSub}>Require password to access</Text>
+                </View>
+              </View>
+              <Switch
+                value={formData.isPasswordProtected}
+                onValueChange={setIsPasswordProtected}
+                trackColor={{ false: '#e2e8f0', true: '#fcd34d' }}
+                thumbColor={formData.isPasswordProtected ? '#f59e0b' : '#f1f5f9'}
+              />
+            </View>
 
-{/* Password Input */}
-{formData.isPasswordProtected && (
-<View style={styles.passwordInputContainer}>
-<TextInput
-style={styles.passwordInput}
-placeholder="Set password"
-secureTextEntry
-value={formData.password}
-onChangeText={setPassword}
-placeholderTextColor="#b45309"
-/>
-{errors.password && (
-<Text style={styles.errorText}>{errors.password}</Text>
-)}
-</View>
-)}
+            {formData.isPasswordProtected && (
+              <View style={styles.passwordInputContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="Set password"
+                  secureTextEntry
+                  value={formData.password}
+                  onChangeText={setPassword}
+                  placeholderTextColor="#b45309"
+                />
+                {errors.password && (
+                  <Text style={styles.errorText}>{errors.password}</Text>
+                )}
+              </View>
+            )}
 
-{/* Anonymous Sharing */}
-<View style={styles.settingRow}>
-<View style={styles.settingInfo}>
-<View
-style={[
-styles.iconBox,
-formData.isAnonymous && { backgroundColor: '#bfdbfe' },
-]}>
-<Icon
-name="person-off"
-size={20}
-color={
-formData.isAnonymous ? COLORS.primary : COLORS.slate400
-}
-/>
-</View>
-<View>
-<Text style={styles.settingRowTitle}>Anonymous</Text>
-<Text style={styles.settingRowSub}>
-Hide device identity
-</Text>
-</View>
-</View>
-<Switch
-value={formData.isAnonymous}
-onValueChange={setIsAnonymous}
-trackColor={{ false: '#e2e8f0', true: '#bfdbfe' }}
-thumbColor={formData.isAnonymous ? COLORS.primary : '#f1f5f9'}
-/>
-</View>
+            {/* Anonymous */}
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <View style={[styles.iconBox, formData.isAnonymous && { backgroundColor: '#bfdbfe' }]}>
+                  <Icon
+                    name="person-off"
+                    size={20}
+                    color={formData.isAnonymous ? COLORS.primary : COLORS.slate400}
+                  />
+                </View>
+                <View>
+                  <Text style={styles.settingRowTitle}>Anonymous</Text>
+                  <Text style={styles.settingRowSub}>Hide your identity</Text>
+                </View>
+              </View>
+              <Switch
+                value={formData.isAnonymous}
+                onValueChange={setIsAnonymous}
+                trackColor={{ false: '#e2e8f0', true: '#bfdbfe' }}
+                thumbColor={formData.isAnonymous ? COLORS.primary : '#f1f5f9'}
+              />
+            </View>
+
+            {/* Linked Only - chỉ hiện khi đã link partner */}
+            {isLinked && (
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <View style={[styles.iconBox, formData.isPublicSharing && { backgroundColor: '#dcfce7' }]}>
+                    <Icon
+                      name="link"
+                      size={20}
+                      color={formData.isPublicSharing ? '#059669' : COLORS.slate400}
+                    />
+                  </View>
+                  <View>
+                    <Text style={styles.settingRowTitle}>Linked Only</Text>
+                    <Text style={styles.settingRowSub}>Only visible to your synced partner</Text>
+                  </View>
+                </View>
+                <Switch
+                  value={formData.isPublicSharing}
+                  onValueChange={setIsPublicSharing}
+                  trackColor={{ false: '#e2e8f0', true: '#a7f3d0' }}
+                  thumbColor={formData.isPublicSharing ? '#059669' : '#f1f5f9'}
+                />
+              </View>
+            )}
           </View>
         </ScrollView>
 
-        {/* Footer with Share Button */}
+        {/* Footer Share Button */}
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.mainShareBtn, isLoading && { opacity: 0.7 }]}
-            onPress={handleShare}
-            disabled={isLoading}>
-{isLoading ? (
-<View style={styles.loadingContent}>
-<ActivityIndicator color="#fff" />
-{uploadProgress > 0 && (
-<Text style={styles.uploadProgressText}>
-Uploading {uploadProgress}%
-</Text>
-)}
-</View>
-) : (
-<View style={styles.mainShareContent}>
-<Icon
-name={hasShareContent ? 'near-me' : 'error-outline'}
-size={22}
-color="#fff"
-/>
-<Text style={styles.mainShareText}>
-{hasShareContent
-? `Share ${CATEGORY_LABELS[
-formData.category
-].toLowerCase()}`
-: 'Select content to share'}
-</Text>
-</View>
-)}
+            onPress={() => {
+              if (hasShareContent) handleShare();
+            }}
+            disabled={isLoading || !hasShareContent}>
+            {isLoading ? (
+              <View style={styles.loadingContent}>
+                <ActivityIndicator color="#fff" />
+                {uploadProgress > 0 && (
+                  <Text style={styles.uploadProgressText}>
+                    Uploading {uploadProgress}%
+                  </Text>
+                )}
+              </View>
+            ) : (
+              <View style={styles.mainShareContent}>
+                <Icon
+                  name={hasShareContent ? 'near-me' : 'error-outline'}
+                  size={22}
+                  color="#fff"
+                />
+                <Text style={styles.mainShareText}>
+                  {hasShareContent
+                    ? `Share ${detectedLabel.toLowerCase()}`
+                    : 'Select content to share'}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -605,87 +547,54 @@ const styles = StyleSheet.create({
   cancelText: { color: COLORS.primary, fontWeight: 'bold' },
   shareText: { color: COLORS.primary, fontWeight: 'bold' },
   content: { padding: 16, paddingBottom: 28 },
-  quickActionsCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+
+  /* Mode Selector */
+  modeSelector: {
+    flexDirection: 'row',
+    gap: 12,
     marginBottom: 16,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 14,
-  },
-  sectionTitle: {
-    fontWeight: 'bold',
-    fontSize: 17,
-    color: COLORS.text,
-  },
-  sectionSubtitle: {
-    color: '#64748b',
-    fontSize: 13,
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  activeTypeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  activeTypeText: {
-    color: COLORS.primary,
-    fontWeight: 'bold',
-    fontSize: 12,
-  },
-  quickGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  quickAction: {
-    width: '48%',
-    minHeight: 86,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
+  modeCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 2,
     borderColor: '#e2e8f0',
+    alignItems: 'center',
   },
-  activeQuickAction: {
-    backgroundColor: '#ffffff',
+  modeCardActive: {
     borderColor: COLORS.primary,
+    backgroundColor: '#eff6ff',
   },
-  quickIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+  modeIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#eff6ff',
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 12,
   },
-  activeQuickIcon: { backgroundColor: COLORS.primary },
-  quickCopy: { flex: 1 },
-  quickTitle: {
-    color: COLORS.text,
+  modeIconBoxActive: {
+    backgroundColor: COLORS.primary,
+  },
+  modeTitle: {
+    fontSize: 15,
     fontWeight: 'bold',
-    fontSize: 14,
+    color: COLORS.text,
+    marginBottom: 4,
   },
-  activeQuickTitle: { color: COLORS.primary },
-  quickSubtitle: {
-    color: '#64748b',
+  modeTitleActive: {
+    color: COLORS.primary,
+  },
+  modeSub: {
     fontSize: 11,
-    lineHeight: 15,
-    marginTop: 2,
+    color: '#64748b',
+    textAlign: 'center',
   },
+
+  /* Content Card */
   contentCard: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -694,69 +603,158 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginBottom: 16,
   },
-  contentIntro: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  contentIntroCopy: { flex: 1 },
-  iconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
+  contentCardDragging: {
+    borderColor: COLORS.primary,
     backgroundColor: '#eff6ff',
+    borderWidth: 2,
+  },
+
+  /* File Info */
+  fileInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  fileIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#f0fdf4',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  uploadTitle: {
-    fontSize: 16,
+  fileName: {
+    fontSize: 14,
     fontWeight: 'bold',
     color: COLORS.text,
   },
-  helperText: {
-    color: '#64748b',
-    lineHeight: 18,
-    marginTop: 4,
-    fontSize: 13,
-  },
-  selectedFileRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  successIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#16a34a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  selectedFileInfo: { flex: 1 },
-  fileSizeText: {
+  fileMeta: {
+    fontSize: 12,
     color: COLORS.slate400,
     marginTop: 4,
   },
-  buttonRow: {
+  changeFileRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 18,
+    gap: 8,
+    marginTop: 16,
   },
-  selectBtn: {
+  changeFileBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-    backgroundColor: COLORS.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-  },
-  selectBtnText: { color: '#fff', fontWeight: 'bold' },
-  secondaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    padding: 12,
     backgroundColor: '#eff6ff',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#bfdbfe',
   },
-  secondaryBtnText: { color: COLORS.primary, fontWeight: 'bold' },
+  changeFileText: {
+    color: COLORS.primary,
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  removeFileBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 12,
+    backgroundColor: '#fef2f2',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  removeFileText: {
+    color: COLORS.danger,
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+
+  /* Pick File Area */
+  pickFileArea: {
+    alignItems: 'center',
+    padding: 24,
+  },
+  pickIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#eff6ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  pickTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: 6,
+  },
+  pickSub: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  pickHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+  },
+  dragHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  dragHintText: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  cameraBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 12,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
+  },
+  cameraBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  sendDisabled: {
+    color: '#94a3b8',
+  },
+
+  /* Type Badge */
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+  },
+  typeBadgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: COLORS.primary,
+  },
+
+  /* Text Input */
   textInput: {
     width: '100%',
     backgroundColor: '#f8fafc',
@@ -766,15 +764,22 @@ const styles = StyleSheet.create({
     padding: 16,
     fontSize: 16,
     color: COLORS.text,
-    marginTop: 16,
   },
-  textArea: { height: 120 },
+  textArea: { minHeight: 120 },
+
+  /* Settings */
   settingsCard: {
     backgroundColor: '#fff',
     padding: 16,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: COLORS.border,
+  },
+  sectionTitle: {
+    fontWeight: 'bold',
+    fontSize: 17,
+    color: COLORS.text,
+    marginBottom: 16,
   },
   settingGroup: { marginBottom: 24 },
   settingLabel: {
@@ -838,6 +843,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#b45309',
   },
+
+  /* Footer */
   footer: {
     padding: 16,
     backgroundColor: '#fff',
@@ -863,18 +870,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   uploadProgressText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
-  reselectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 14,
-  },
-  reselectText: { color: COLORS.text, fontWeight: 'bold' },
   errorText: {
-    color: COLORS.danger || '#ef4444',
+    color: '#ef4444',
     fontSize: 12,
     marginTop: 8,
   },

@@ -7,12 +7,12 @@ import {
   StyleSheet,
   ScrollView,
   SafeAreaView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
 import { AUTH_URL } from '../config/env';
+import { showAlert } from '../utils/alert';
 
 const COLORS = {
   primary: '#2563EB',
@@ -32,17 +32,15 @@ const RegisterScreen = ({ navigation }: any) => {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleRegister = async () => {
-    // 1. Validate
     if (!fullName || !email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all fields');
+      showAlert('Error', 'Please fill in all fields');
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
+      showAlert('Error', 'Passwords do not match');
       return;
     }
 
-    // 2. Gọi API
     setIsLoading(true);
     try {
       const response = await fetch(`${AUTH_URL}/register`, {
@@ -54,25 +52,15 @@ const RegisterScreen = ({ navigation }: any) => {
       const data = await response.json();
 
       if (response.ok) {
-        Alert.alert('Success', 'Account created successfully!', [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Tự động đăng nhập luôn sau khi đăng ký thành công
-              login(data.token, data.user);
-              navigation.replace('MainApp'); // Vào màn hình chính
-            },
-          },
-        ]);
+        showAlert('Success', 'Account created successfully!');
+        login(data.token, data.user);
+        navigation.replace('MainApp');
       } else {
-        Alert.alert(
-          'Registration Failed',
-          data.message || 'Error creating account'
-        );
+        showAlert('Registration Failed', data.message || 'Error creating account');
       }
     } catch (error) {
       console.error(error);
-      Alert.alert('Error', 'Cannot connect to server');
+      showAlert('Error', 'Cannot connect to server');
     } finally {
       setIsLoading(false);
     }

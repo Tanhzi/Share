@@ -12,7 +12,6 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
-  FlatList,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -20,8 +19,11 @@ import { SYNC_URL, DOCUMENT_URL } from '../config/env';
 import { useFocusEffect } from '@react-navigation/native';
 import GuestPlaceholder from '../components/GuestPlaceholder';
 import { apiGet, apiPost, apiPut } from '../api/client';
-import DocumentPreview from '../components/DocumentPreview';
 import { useFileDownload } from '../hooks/useFileDownload';
+import { navigationRef } from '../utils/SimpleNavigation';
+import { showAlert } from '../utils/alert';
+
+const DEFAULT_AVATAR = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iI2UyZThmMCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iNDgiIGZpbGw9IiM5NGEzYjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7wn5GTPC90ZXh0Pjwvc3ZnPg==';
 
 const COLORS = {
   primary: '#2563EB',
@@ -49,15 +51,6 @@ const formatRelativeTime = (dateString: string) => {
 
 type SyncStatus = 'idle' | 'connecting' | 'syncing' | 'paused' | 'error' | 'completed';
 
-interface SyncHistory {
-  id: string;
-  type: 'incoming' | 'outgoing';
-  action: string;
-  timestamp: string;
-  status: 'success' | 'failed' | 'pending';
-  partner?: string;
-}
-
 type SyncStatusResponse = {
   isLinked: boolean;
   partner?: any;
@@ -80,16 +73,16 @@ type PartnerDocumentsResponse = {
   hasDocuments?: boolean;
 };
 
-const SyncScreen = () => {
+const SyncScreen = ({ navigation: navProp }: any) => {
+  const nav = navProp || navigationRef;
   const { token, user, isLoggedIn } = useAuth();
   const authToken = token ?? undefined;
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Sync State Machine
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-  const [syncProgress, setSyncProgress] = useState(0);
-  const [syncHistory, setSyncHistory] = useState<SyncHistory[]>([]);
+  const [, setSyncStatus] = useState<SyncStatus>('idle');
+  const [, setSyncProgress] = useState(0);
 
   // Data State
   const [isLinked, setIsLinked] = useState(false);
@@ -104,52 +97,32 @@ const SyncScreen = () => {
   const [signedUrls, setSignedUrls] = useState<{ [key: string]: string }>({});
 
   // Download State
-  const [downloadingFiles, setDownloadingFiles] = useState<{
-    [key: string]: boolean;
-  }>({});
   const [downloadedFiles, setDownloadedFiles] = useState<{
     [key: string]: boolean;
   }>({});
+  const [knownDocIds, setKnownDocIds] = useState<Set<string>>(new Set());
 
   // Input & Settings
   const [emailToLink, setEmailToLink] = useState('');
-  const [isAutoDownload, setIsAutoDownload] = useState(true);
+  // Mặc định OFF: tránh tải toàn bộ tài liệu của partner trước khi server xác nhận
+  const [isAutoDownload, setIsAutoDownload] = useState(false);
   const [isAutoView, setIsAutoView] = useState(false);
 
   // Use file download hook
-  const { downloadFile, getProgress } = useFileDownload({
-    onDownloadStart: (docId) => {
-      console.log('Download started:', docId);
-      addToSyncHistory(docId, 'Auto-download', 'pending');
-    },
-    onDownloadComplete: (docId, path) => {
-      console.log('Download completed:', docId, path);
-      addToSyncHistory(docId, 'Auto-download', 'success');
-    },
+  const { downloadFile } = useFileDownload({
     onDownloadError: (docId, error) => {
       console.error('Download error:', docId, error);
-      addToSyncHistory(docId, 'Auto-download', 'failed');
     },
   });
-
-  const addToSyncHistory = (docId: string, action: string, status: 'success' | 'failed' | 'pending') => {
-    setSyncHistory(prev => [
-      {
-        id: Date.now().toString(),
-        type: 'incoming',
-        action,
-        timestamp: new Date().toISOString(),
-        status,
-        partner: partner?.email || 'Unknown',
-      },
-      ...prev.slice(0, 9), // Keep last 10 items
-    ]);
-  };
 
   // --- FETCH DATA ---
   const fetchData = useCallback(async () => {
     try {
-      if (!authToken) return;
+      if (!authToken) {
+        setIsLoading(false);
+        setRefreshing(false);
+        return;
+      }
       const data = await apiGet<SyncStatusResponse>(
         `${SYNC_URL}/status`,
         authToken
@@ -170,8 +143,10 @@ const SyncScreen = () => {
         setIncomingRequests(reqData.incoming || []);
         setOutgoingRequests(reqData.outgoing || []);
       }
-    } catch (e) {
-      console.error('Fetch error:', e);
+    } catch (e: any) {
+      // Giữ nguyên trạng thái đã kết nối hiện tại — chỉ báo lỗi mạng (T6)
+      console.error('[Sync] Fetch error:', e?.message || e);
+      Alert.alert('Error', 'Could not refresh sync status. Please check your connection and try again.');
     } finally {
       setIsLoading(false);
       setRefreshing(false);
@@ -210,13 +185,8 @@ const SyncScreen = () => {
 // Hàm tải file tự động
 const autoDownloadFile = useCallback(
   async (doc: any) => {
-    if (downloadedFiles[doc.id] || downloadingFiles[doc.id]) {
-      return; // Already downloaded or downloading
-    }
-
-    // Only auto-download images and videos when auto-download is enabled
-    if (!isAutoDownload || (doc.type !== 'image' && doc.type !== 'video')) {
-      return;
+    if (downloadedFiles[doc.id]) {
+      return; // Already downloaded
     }
 
     try {
@@ -231,10 +201,9 @@ const autoDownloadFile = useCallback(
       setDownloadedFiles(prev => ({ ...prev, [doc.id]: true }));
     } catch (error) {
       console.error('Auto-download failed:', error);
-      addToSyncHistory(doc.id, 'Auto-download', 'failed');
     }
   },
-  [downloadedFiles, downloadingFiles, isAutoDownload, fetchSignedUrl, downloadFile]
+  [downloadedFiles, fetchSignedUrl, downloadFile]
 );
 
 const fetchPartnerDocuments = useCallback(async () => {
@@ -256,40 +225,54 @@ const fetchPartnerDocuments = useCallback(async () => {
     setPartnerDocuments(documents);
     setHasDocuments(Boolean(data.hasDocuments));
 
-    // Pre-fetch signed URLs for images and videos
-    const mediaDocs = documents.filter(
+    // Chỉ auto-download tài liệu MỚI (chưa từng thấy trước đây)
+    const newDocIds = new Set(documents.map((d: any) => d.id));
+    const trulyNewDocs = documents.filter(
+      (doc: any) => !knownDocIds.has(doc.id)
+    );
+
+    // Cập nhật danh sách đã biết
+    setKnownDocIds(newDocIds);
+
+    // Pre-fetch signed URLs for display (images/videos)
+    const allNewDocs = isAutoDownload ? trulyNewDocs : [];
+    const mediaForDisplay = documents.filter(
       (doc: any) => doc.type === 'image' || doc.type === 'video'
     );
     
     setSyncStatus('syncing');
     setSyncProgress(0);
     
-    for (const doc of mediaDocs) {
+    // Pre-fetch signed URLs cho ảnh/video cần hiển thị
+    for (const doc of mediaForDisplay) {
       await fetchSignedUrl(doc.id);
+    }
 
-      // Auto-download if enabled
-      if (isAutoDownload) {
+    // Auto-download tất cả tài liệu mới
+    if (isAutoDownload) {
+      const downloadTargets = allNewDocs;
+      for (const doc of downloadTargets) {
+        await fetchSignedUrl(doc.id);
         await autoDownloadFile(doc);
+        setSyncProgress(prev => prev + (100 / (downloadTargets.length || 1)));
       }
-      setSyncProgress(prev => prev + (100 / mediaDocs.length || 1));
     }
     
     setSyncStatus('completed');
   } catch (error) {
     console.error('Fetch partner documents error:', error);
     setSyncStatus('error');
-    addToSyncHistory('sync', 'Fetch documents', 'failed');
   } finally {
     setIsLoadingDocuments(false);
   }
-}, [authToken, isLinked, isAutoDownload, fetchSignedUrl, autoDownloadFile]);
+}, [authToken, isLinked, isAutoDownload, knownDocIds, fetchSignedUrl, autoDownloadFile]);
 
   useFocusEffect(
     useCallback(() => {
       if (isLoggedIn && user) {
         fetchData();
       }
-    }, [fetchData, isLoggedIn, user])
+    }, [isLoggedIn, user, fetchData])
   );
 
   useFocusEffect(
@@ -297,7 +280,7 @@ const fetchPartnerDocuments = useCallback(async () => {
       if (isLoggedIn && user && isLinked) {
         fetchPartnerDocuments();
       }
-    }, [fetchPartnerDocuments, isLinked, isLoggedIn, user])
+    }, [isLinked, isLoggedIn, user, fetchPartnerDocuments])
   );
 
   const onRefresh = () => {
@@ -311,23 +294,23 @@ const fetchPartnerDocuments = useCallback(async () => {
   // --- ACTIONS ---
   const handleLinkAccount = async () => {
     if (!emailToLink.includes('@'))
-      return Alert.alert('Invalid Email', 'Please check email.');
+      return showAlert('Invalid Email', 'Please check email.');
     if (!authToken) return;
     setIsLoading(true);
     try {
       await apiPost(`${SYNC_URL}/link`, { email: emailToLink }, authToken);
       setEmailToLink('');
       fetchData();
-      Alert.alert('Sent', 'Invitation sent.');
+      showAlert('Sent', 'Invitation sent.');
     } catch {
-      Alert.alert('Error', 'Network error');
+      showAlert('Error', 'Network error');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleCancelRequest = async (connectionId: string) => {
-    Alert.alert('Cancel', 'Revoke invitation?', [
+    showAlert('Cancel', 'Revoke invitation?', [
       { text: 'No' },
       {
         text: 'Yes',
@@ -339,7 +322,7 @@ const fetchPartnerDocuments = useCallback(async () => {
             fetchData();
           } catch (error) {
             console.error('Cancel sync request error:', error);
-            Alert.alert('Error', 'Could not cancel request.');
+            showAlert('Error', 'Could not cancel request.');
           }
         },
       },
@@ -356,7 +339,7 @@ const fetchPartnerDocuments = useCallback(async () => {
       await apiPost(`${SYNC_URL}/respond`, { connectionId, action }, authToken);
       fetchData();
     } catch {
-      Alert.alert('Error', 'Failed');
+      showAlert('Error', 'Failed');
     } finally {
       setIsLoading(false);
     }
@@ -385,12 +368,12 @@ const fetchPartnerDocuments = useCallback(async () => {
       console.error('Update sync settings error:', error);
       setIsAutoDownload(previousAutoDownload);
       setIsAutoView(previousAutoView);
-      Alert.alert('Error', 'Could not update sync settings.');
+      showAlert('Error', 'Could not update sync settings.');
     }
   };
 
   const handleUnlink = () => {
-    Alert.alert('Disconnect', 'Stop sharing?', [
+    showAlert('Disconnect', 'Stop sharing?', [
       {
         text: 'Cancel',
       },
@@ -406,7 +389,7 @@ const fetchPartnerDocuments = useCallback(async () => {
             fetchData();
           } catch (error) {
             console.error('Unlink sync error:', error);
-            Alert.alert('Error', 'Could not disconnect partner.');
+            showAlert('Error', 'Could not disconnect partner.');
           }
         },
       },
@@ -420,6 +403,7 @@ const fetchPartnerDocuments = useCallback(async () => {
         title="Sync Center"
         subtitle="Sign in to manage connections."
         icon="sync"
+        navigation={nav}
       />
     );
   }
@@ -458,7 +442,7 @@ const fetchPartnerDocuments = useCallback(async () => {
                   <Image
                     source={{
                       uri:
-                        user?.avatar_url || 'https://via.placeholder.com/150',
+                        user?.avatar_url || DEFAULT_AVATAR,
                     }}
                     style={styles.bigAvatar}
                   />
@@ -471,12 +455,12 @@ const fetchPartnerDocuments = useCallback(async () => {
                 <View style={styles.avatarWrapper}>
                   <Image
                     source={{
-                      uri: partner.avatar || 'https://via.placeholder.com/150',
+                      uri: partner.avatar || DEFAULT_AVATAR,
                     }}
                     style={styles.bigAvatar}
                   />
                   <Text style={styles.avatarLabel}>
-                    {partner.name.split(' ')[0]}
+                    {(partner.name || partner.email || 'Partner').split(' ')[0]}
                   </Text>
                 </View>
               </View>
@@ -489,14 +473,20 @@ const fetchPartnerDocuments = useCallback(async () => {
             {/* Actions */}
             <Text style={styles.sectionHeader}>QUICK ACTIONS</Text>
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionBtn}>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => nav.navigate('ShareForm', { linkedOnly: true })}
+              >
                 <View
                   style={[styles.actionIcon, { backgroundColor: '#dbeafe' }]}>
                   <Icon name="send" size={24} color={COLORS.primary} />
                 </View>
                 <Text style={styles.actionText}>Send File</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn}>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => nav.navigate('History', { pairOnly: true })}
+              >
                 <View
                   style={[styles.actionIcon, { backgroundColor: '#f3e8ff' }]}>
                   <Icon name="history" size={24} color="#9333ea" />
@@ -531,41 +521,8 @@ const fetchPartnerDocuments = useCallback(async () => {
                                   uri: signedUrls[doc.id] || '',
                                 }}
                                 style={styles.previewImage}
-                                resizeMode="cover"
-                                onLoad={() =>
-                                  console.log(
-                                    'Image loaded successfully:',
-                                    doc.id
-                                  )
-                                }
-                                onError={error =>
-                                  console.log(
-                                    'Image load error:',
-                                    error.nativeEvent.error,
-                                    doc.id
-                                  )
-                                }
+                                resizeMode="contain"
                               />
-                              <View style={styles.previewOverlay}>
-                                {downloadingFiles[doc.id] ? (
-                                  <ActivityIndicator
-                                    size="small"
-                                    color={COLORS.white}
-                                  />
-                                ) : downloadedFiles[doc.id] ? (
-                                  <Icon
-                                    name="check-circle"
-                                    size={16}
-                                    color={COLORS.success}
-                                  />
-                                ) : (
-                                  <Icon
-                                    name="image"
-                                    size={16}
-                                    color={COLORS.white}
-                                  />
-                                )}
-                              </View>
                             </View>
                           )}
                           {doc.type === 'video' && (
@@ -577,49 +534,29 @@ const fetchPartnerDocuments = useCallback(async () => {
                               <TouchableOpacity
                                 style={styles.videoPlayButton}
                                 onPress={() => {
-                                  // Handle video play - could open in modal or external player
-                                  Alert.alert(
+                                  showAlert(
                                     'Video Preview',
                                     'Video playback feature coming soon!'
                                   );
                                 }}>
-                                {downloadingFiles[doc.id] ? (
-                                  <ActivityIndicator
-                                    size="small"
-                                    color={COLORS.white}
-                                  />
-                                ) : (
-                                  <Icon
-                                    name="play-circle-filled"
-                                    size={40}
-                                    color={COLORS.white}
-                                  />
-                                )}
+                                <Icon
+                                  name="play-circle-filled"
+                                  size={40}
+                                  color={COLORS.white}
+                                />
                               </TouchableOpacity>
-                              <Text style={styles.videoDuration}>
-                                {downloadingFiles[doc.id]
-                                  ? 'Downloading...'
-                                  : 'Video'}
-                              </Text>
                             </View>
                           )}
                           <View style={styles.previewFooter}>
-                            <Text style={styles.previewTime}>
-                              {formatRelativeTime(doc.createdAt)}
-                            </Text>
-                            {isAutoDownload &&
-                              !downloadedFiles[doc.id] &&
-                              !downloadingFiles[doc.id] && (
-                                <TouchableOpacity
-                                  style={styles.downloadBtn}
-                                  onPress={() => autoDownloadFile(doc)}>
-                                  <Icon
-                                    name="download"
-                                    size={16}
-                                    color={COLORS.primary}
-                                  />
-                                </TouchableOpacity>
-                              )}
+                            {downloadedFiles[doc.id] ? (
+                              <Icon name="check-circle" size={20} color={COLORS.success} />
+                            ) : (
+                              <TouchableOpacity
+                                style={styles.downloadBtn}
+                                onPress={() => autoDownloadFile(doc)}>
+                                <Icon name="download" size={20} color={COLORS.primary} />
+                              </TouchableOpacity>
+                            )}
                           </View>
                         </View>
                       ))}
@@ -684,50 +621,60 @@ const fetchPartnerDocuments = useCallback(async () => {
                       .slice(0, 3)
                       .map(doc => (
                         <View key={doc.id} style={styles.previewItem}>
-                          {doc.type === 'link' && (
-                            <View style={styles.linkPreview}>
-                              <Icon
-                                name="link"
-                                size={24}
-                                color={COLORS.primary}
-                              />
-                              <Text style={styles.linkText} numberOfLines={2}>
-                                {doc.content || doc.name}
-                              </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{ flex: 1 }}>
+                              {doc.type === 'link' && (
+                                <View style={styles.linkPreview}>
+                                  <Icon
+                                    name="link"
+                                    size={24}
+                                    color={COLORS.primary}
+                                  />
+                                  <Text style={styles.linkText} numberOfLines={2}>
+                                    {doc.content || doc.name}
+                                  </Text>
+                                </View>
+                              )}
+                              {doc.type === 'text' && (
+                                <View style={styles.textPreview}>
+                                  <Icon
+                                    name="description"
+                                    size={24}
+                                    color={COLORS.success}
+                                  />
+                                  <Text
+                                    style={styles.textPreviewContent}
+                                    numberOfLines={2}>
+                                    Note...
+                                  </Text>
+                                </View>
+                              )}
+                              {(doc.type === 'file' ||
+                                doc.type === 'document' ||
+                                doc.type === 'archive' ||
+                                doc.type === 'audio') && (
+                                <View style={styles.filePreview}>
+                                  <Icon
+                                    name="insert-drive-file"
+                                    size={24}
+                                    color={COLORS.subText}
+                                  />
+                                  <Text style={styles.fileName} numberOfLines={2}>
+                                    {doc.name}
+                                  </Text>
+                                </View>
+                              )}
                             </View>
-                          )}
-                          {doc.type === 'text' && (
-                            <View style={styles.textPreview}>
-                              <Icon
-                                name="description"
-                                size={24}
-                                color={COLORS.success}
-                              />
-                              <Text
-                                style={styles.textPreviewContent}
-                                numberOfLines={2}>
-                                Note...
-                              </Text>
-                            </View>
-                          )}
-                          {(doc.type === 'file' ||
-                            doc.type === 'document' ||
-                            doc.type === 'archive' ||
-                            doc.type === 'audio') && (
-                            <View style={styles.filePreview}>
-                              <Icon
-                                name="insert-drive-file"
-                                size={24}
-                                color={COLORS.subText}
-                              />
-                              <Text style={styles.fileName} numberOfLines={2}>
-                                {doc.name}
-                              </Text>
-                            </View>
-                          )}
-                          <Text style={styles.previewTime}>
-                            {formatRelativeTime(doc.createdAt)}
-                          </Text>
+                            {downloadedFiles[doc.id] ? (
+                              <Icon name="check-circle" size={22} color={COLORS.success} style={{ marginLeft: 8 }} />
+                            ) : (
+                              <TouchableOpacity
+                                style={styles.downloadBtn}
+                                onPress={() => autoDownloadFile(doc)}>
+                                <Icon name="download" size={20} color={COLORS.primary} />
+                              </TouchableOpacity>
+                            )}
+                          </View>
                         </View>
                       ))}
                     {partnerDocuments.filter(
@@ -1203,28 +1150,19 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  imagePreview: { position: 'relative', marginBottom: 8 },
+  imagePreview: { marginBottom: 8 },
   previewImage: {
     width: '100%',
-    height: 120,
+    aspectRatio: 16 / 9,
     borderRadius: 12,
     backgroundColor: '#f8fafc',
   },
-  previewOverlay: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 12,
-    padding: 4,
-  },
   videoPreview: {
-    height: 120,
+    height: 200,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
-    position: 'relative',
   },
   videoPlayButton: {
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1305,7 +1243,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
-  downloadBtn: { padding: 4, borderRadius: 12, backgroundColor: '#f0f9ff' },
+  downloadBtn: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: '#f0f9ff',
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   viewMoreBtn: {
     flexDirection: 'row',
     alignItems: 'center',
